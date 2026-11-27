@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Windows 掛載管理器本機實體磁碟模式 (Mount Manager Local Disk)** (`src/vfs/mod.rs`, `src/main.rs`, `scripts/build-msi.ps1`):
+  - 徹底移除 UNC 網路重定向標籤，改採 `\\.\<代號>` 語法向 Windows 核心掛載管理器 (`\Device\MountPointManager`) 註冊全域磁碟區。
+  - 檔案總管顯示為標準本機硬碟圖示 (`DRIVE_FIXED`)，不再呈現為網路磁碟機。
+  - 解決 Windows 1005 (`ERROR_UNRECOGNIZED_VOLUME`) 錯誤，各類免安裝可攜式程式 (Portable `.exe`) 直接雙擊執行零報錯。
+  - 內建 Windows 管理員權限檢測與友善 UAC 自動提權重啟對話框。
+  - MSI 安裝套件自動於 `HKLM\SOFTWARE\WinFsp` 註冊 `MountUseMountmgrFromFSD` 旗標以強化全域磁碟協同。
 - **原生設定視窗 (Settings UI)** (`src/ui/settings.rs`):
   - 純 Win32 原生對話框介面（零第三方 GUI 依賴、微秒級啟動）。
   - 支援從系統匣圖示左鍵點擊、雙擊或右鍵選單「⚙️ 磁碟設定」直接叫出。

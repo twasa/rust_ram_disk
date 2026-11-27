@@ -63,6 +63,11 @@
 ```
 
 ## 🛡️ 權限與生命週期整合 (Security & Process Lifecycle)
+- **Windows 掛載管理器本機磁碟模式 (True Local Disk via Mount Manager)**：
+  - **原生硬碟圖示**：透過 `\\.\<代號>` 向 Windows 掛載管理器 (`\Device\MountPointManager`) 註冊全域磁碟區，Windows 檔案總管顯示為標準**本機硬碟 (`DRIVE_FIXED`)**，徹底告別網路磁碟圖示。
+  - **免安裝軟體相容支援**：消除 Windows 1005 (`ERROR_UNRECOGNIZED_VOLUME`) 錯誤，Windows PE Loader 與 AppCompat 能正確解析磁碟區代號，所有免安裝可攜式程式（Portable `.exe`）皆可直接雙擊順暢執行。
+  - **自動 UAC 權限導引**：若未以系統管理員身分啟動，程式會主動跳出友善說明視窗並透過標準 Windows UAC 機制完成提權重啟。
+  - **MSI 安裝環境優化**：MSI 安裝套件自動於 `HKLM\SOFTWARE\WinFsp` 註冊 `MountUseMountmgrFromFSD` 旗標，確保核心驅動與全域掛載管理器無縫協同。
 - **全新乾淨環境隨裝即用 (Out-of-the-Box on Clean Windows)**：
   - **雙重安裝管道**：同步提供 **WiX Burn 整合引導檔 (`RustRAMDiskSetup.exe`)** 與 **標準微軟 MSI 安裝包 (`RustRAMDisk.msi`)**。
   - **安裝完成即時掛載**：MSI 與引導程式於安裝完成後立即自動調用掛載程序，`R:` 磁碟機代號與系統匣即刻就緒，無需使用者手動尋找捷徑啟動。

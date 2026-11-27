@@ -300,7 +300,40 @@ fn main() -> anyhow::Result<()> {
                 }
             }
 
-            // 2. 執行實體掛載
+            // 2. 檢核管理員權限 (Mount Manager 本機實體硬碟掛載需要管理員授權)
+            #[cfg(target_os = "windows")]
+            if !vfs::is_elevated() {
+                println!("🛡️ 為了將 RAM Disk 註冊為 Windows 本機實體硬碟 (Local Disk)，需要管理員權限...");
+                if tray {
+                    use windows::core::w;
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        MessageBoxW, IDOK, MB_ICONINFORMATION, MB_OKCANCEL,
+                    };
+                    let msg = format!(
+                        "Rust RAM Disk 即將把虛擬磁碟機 ({}) 註冊為 Windows 本機實體硬碟 (Local Disk)。\n\n\
+                        本機硬碟模式可完美支援各類免安裝軟體執行與檔案預覽，此操作需要 Windows 管理員授權。\n\n\
+                        點選【確定】將為您開啟 Windows 授權提示 (請在接下來的畫面點選【是】)。",
+                        norm_mount
+                    );
+                    let wide_msg: Vec<u16> =
+                        msg.encode_utf16().chain(std::iter::once(0)).collect();
+                    let ret = unsafe {
+                        MessageBoxW(
+                            None,
+                            windows::core::PCWSTR(wide_msg.as_ptr()),
+                            w!("Rust RAM Disk - 系統管理員權限需求"),
+                            MB_ICONINFORMATION | MB_OKCANCEL,
+                        )
+                    };
+                    if ret != IDOK {
+                        return Err(anyhow::anyhow!("使用者取消管理員提權授權，掛載中止"));
+                    }
+                }
+                vfs::relaunch_elevated()?;
+                return Ok(());
+            }
+
+            // 3. 執行實體掛載
             let mut current_norm_mount = norm_mount.clone();
             let mut current_size = size.clone();
             let mut current_compress = compress;

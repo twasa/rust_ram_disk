@@ -185,6 +185,12 @@ $WixXml = @"
       <Component Id="ReadmeFile" Guid="{B1A2C3D4-6666-4A5B-8C7D-0E1F2A3B4C5D}" Win64="yes">
         <File Id="ReadmeDoc" Source="$StagingDir\README.md" KeyPath="yes" />
       </Component>
+
+      <!-- WinFsp Mount Manager Kernel-mode Registration -->
+      <Component Id="MountManagerConfig" Guid="{F3E2D1C0-9999-4A5B-8C7D-0E1F2A3B4C5D}" Win64="yes">
+        <RegistryValue Root="HKLM" Key="SOFTWARE\WinFsp" Name="MountUseMountmgrFromFSD" Type="integer" Value="1" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="SOFTWARE\WOW6432Node\WinFsp" Name="MountUseMountmgrFromFSD" Type="integer" Value="1" />
+      </Component>
     </DirectoryRef>
 
     <!-- Shortcuts -->
@@ -231,6 +237,7 @@ $WixXml = @"
       <ComponentRef Id="ReadmeFile" />
       <ComponentRef Id="ApplicationShortcuts" />
       <ComponentRef Id="DesktopShortcutComponent" />
+      <ComponentRef Id="MountManagerConfig" />
     </Feature>
 
     <!-- Post-installation Launch Action: Auto-mount R: drive upon install -->

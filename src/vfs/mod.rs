@@ -83,7 +83,95 @@ pub fn is_driver_installed() -> bool {
     false
 }
 
-/// 尋找本機可用的 WinFsp 安裝套件 (winfsp-installer.msi)
+/// 檢查當前執行程序是否具備管理員權限 (Elevated Token)
+#[cfg(target_os = "windows")]
+pub fn is_elevated() -> bool {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    unsafe {
+        let mut token = HANDLE::default();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_ok() {
+            let mut elevation = TOKEN_ELEVATION::default();
+            let mut size = std::mem::size_of::<TOKEN_ELEVATION>() as u32;
+            let ret = GetTokenInformation(
+                token,
+                TokenElevation,
+                Some(&mut elevation as *mut _ as *mut _),
+                size,
+                &mut size,
+            );
+            let _ = CloseHandle(token);
+            if ret.is_ok() {
+                return elevation.TokenIsElevated != 0;
+            }
+        }
+        false
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn is_elevated() -> bool {
+    true
+}
+
+/// 自動以 Windows 管理員權限重啟當前程序 (UAC 提權)
+#[cfg(target_os = "windows")]
+pub fn relaunch_elevated() -> Result<(), VfsError> {
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWDEFAULT;
+
+    let exe = std::env::current_exe().map_err(VfsError::ProcessLaunch)?;
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args_str = args
+        .iter()
+        .map(|a| {
+            if a.contains(' ') {
+                format!("\"{}\"", a)
+            } else {
+                a.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let wide_exe: Vec<u16> = exe
+        .to_string_lossy()
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let wide_args: Vec<u16> = args_str.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide_verb: Vec<u16> = "runas\0".encode_utf16().collect();
+
+    let mut sei = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOCLOSEPROCESS,
+        hwnd: Default::default(),
+        lpVerb: PCWSTR(wide_verb.as_ptr()),
+        lpFile: PCWSTR(wide_exe.as_ptr()),
+        lpParameters: PCWSTR(wide_args.as_ptr()),
+        lpDirectory: PCWSTR::null(),
+        nShow: SW_SHOWDEFAULT.0 as i32,
+        ..Default::default()
+    };
+
+    unsafe {
+        ShellExecuteExW(&mut sei).map_err(|e| {
+            VfsError::ProcessLaunch(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+        })?;
+    }
+
+    std::process::exit(0);
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn relaunch_elevated() -> Result<(), VfsError> {
+    Ok(())
+}
+
+/// 尋找 WinFsp 核心安裝套件 (winfsp-installer.msi)
 pub fn find_winfsp_installer() -> Option<PathBuf> {
     let mut candidates = Vec::new();
 
@@ -315,11 +403,10 @@ pub fn mount_ram_disk(mount_point_raw: &str, capacity_bytes: u64) -> Result<VfsM
     // -s <capacity_bytes>: 支援的單檔最大容量
     // -f: 關閉檔案控制代碼時立即 flush and purge 快取，確保跨程序讀取與預覽即時一致
     // -S: 指定 Root SDDL，包含 OICI 繼承與 FA 完全控制權，確保免安裝軟體可執行、檔案預覽與所有使用者讀寫權限
-    // -u: 指定 UNC 前綴，促使 WinFsp 透過 Windows 網路提供者 (MUP) 註冊磁碟機代號，
-    //     徹底消除 GetFinalPathNameByHandleW 的 Error 1005 (ERROR_UNRECOGNIZED_VOLUME)，
-    //     讓免安裝執行檔 (Portable .exe)、PE Loader、WebView2 及各類應用程式皆能正常執行與解析路徑。
-    let drive_letter = mount_point.trim_end_matches(':').to_lowercase();
-    let unc_prefix = format!("\\rustramdisk\\{}", drive_letter);
+    // -m \\.\<mount_point>: 透過 Windows 掛載管理器 (Mount Manager, \Device\MountPointManager) 註冊為本機實體磁碟 (DRIVE_FIXED)，
+    //     不僅檔案總管呈現標準本機硬碟圖示（非網路磁碟），更讓 GetFinalPathNameByHandleW 正確反查 Volume，
+    //     免安裝軟體 (.exe)、PE Loader、WebView2 及檔案預覽皆能完美運作。
+    let mount_target = format!("\\\\.\\{}", mount_point);
     let sddl = "O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;WD)";
     let mut cmd = Command::new(&memfs_bin);
     cmd.arg("-i")
@@ -332,10 +419,8 @@ pub fn mount_ram_disk(mount_point_raw: &str, capacity_bytes: u64) -> Result<VfsM
         .arg("-f")
         .arg("-S")
         .arg(sddl)
-        .arg("-u")
-        .arg(&unc_prefix)
         .arg("-m")
-        .arg(&mount_point);
+        .arg(&mount_target);
 
     #[cfg(target_os = "windows")]
     {
