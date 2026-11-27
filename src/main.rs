@@ -99,8 +99,17 @@ fn parse_size(input: &str) -> Result<u64, String> {
 fn main() -> anyhow::Result<()> {
     #[cfg(target_os = "windows")]
     unsafe {
-        use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
-        let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+        use windows::Win32::System::Console::{AttachConsole, SetStdHandle, ATTACH_PARENT_PROCESS, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
+        use windows::Win32::Foundation::HANDLE;
+        use std::os::windows::io::IntoRawHandle;
+
+        if AttachConsole(ATTACH_PARENT_PROCESS).is_ok() {
+            if let Ok(file) = std::fs::OpenOptions::new().write(true).open("CONOUT$") {
+                let raw = file.into_raw_handle();
+                let _ = SetStdHandle(STD_OUTPUT_HANDLE, HANDLE(raw as _));
+                let _ = SetStdHandle(STD_ERROR_HANDLE, HANDLE(raw as _));
+            }
+        }
     }
 
     tracing_subscriber::fmt::init();
@@ -224,20 +233,71 @@ fn main() -> anyhow::Result<()> {
                 }
             }
 
-            // 1. 驅動環境檢核
+            // 1. 驅動環境檢核與自動註冊修復
             if !vfs::is_driver_installed() {
-                eprintln!("\n❌ 錯誤：未偵測到已安裝之 WinFsp 核心檔案系統代理驅動！");
-                eprintln!("   Windows 必須註冊 WinFsp 核心驅動 (winfsp.sys) 才能建立虛擬磁碟機代號。");
-                eprintln!("------------------------------------------------------------");
-                eprintln!("👉 解決方式：");
+                println!("🔍 系統尚未註冊 WinFsp 核心檔案系統代理驅動 (winfsp.sys)...");
                 if let Some(installer) = vfs::find_winfsp_installer() {
-                    eprintln!("   1. 請先執行專案安裝套件註冊驅動：");
-                    eprintln!("      {}", installer.display());
+                    println!("📦 偵測到驅動安裝套件: {}", installer.display());
+                    println!("🚀 正在為您自動完成 WinFsp 核心驅動註冊 (請在 UAC 提示中確認)...");
+
+                    #[cfg(target_os = "windows")]
+                    if tray {
+                        use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OKCANCEL, IDOK};
+                        use windows::core::w;
+                        let msg = format!(
+                            "未偵測到 WinFsp 核心檔案系統代理驅動程式 (winfsp.sys)。\n\n\
+                            Rust RAM Disk 需要 WinFsp 核心驅動以建立虛擬磁碟機代號 ({})。\n\n\
+                            點選【確定】將自動為您啟動驅動程式安裝程序 (請在接下來的 Windows 提示中點選【是】)。",
+                            norm_mount
+                        );
+                        let wide_msg: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
+                        let ret = unsafe {
+                            MessageBoxW(
+                                None,
+                                windows::core::PCWSTR(wide_msg.as_ptr()),
+                                w!("Rust RAM Disk - 核心驅動程式設定"),
+                                MB_ICONINFORMATION | MB_OKCANCEL,
+                            )
+                        };
+                        if ret != IDOK {
+                            return Err(anyhow::anyhow!("使用者取消驅動程式安裝，掛載中止"));
+                        }
+                    }
+
+                    match vfs::install_winfsp_driver_silent() {
+                        Ok(_) => {
+                            println!("🎉 WinFsp 核心驅動已成功註冊完成！");
+                        }
+                        Err(e) => {
+                            eprintln!("❌ 自動安裝驅動失敗: {}", e);
+                            #[cfg(target_os = "windows")]
+                            if tray {
+                                use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+                                use windows::core::w;
+                                let err_msg = format!("WinFsp 核心驅動安裝未完成: {}\n\n無法建立虛擬磁碟機代號 {}", e, norm_mount);
+                                let wide_err: Vec<u16> = err_msg.encode_utf16().chain(std::iter::once(0)).collect();
+                                unsafe {
+                                    MessageBoxW(None, windows::core::PCWSTR(wide_err.as_ptr()), w!("Rust RAM Disk 錯誤"), MB_ICONERROR | MB_OK);
+                                }
+                            }
+                            return Err(anyhow::anyhow!("WinFsp 核心驅動未安裝，掛載中止: {}", e));
+                        }
+                    }
                 } else {
-                    eprintln!("   1. 請安裝本專案提供的安裝套件 (RustRAMDisk.msi)");
+                    eprintln!("\n❌ 錯誤：未偵測到已安裝之 WinFsp 核心檔案系統代理驅動，且找不到安裝套件！");
+                    eprintln!("   請先執行專案安裝套件 (RustRAMDisk.msi) 完整安裝驅動程式。\n");
+                    #[cfg(target_os = "windows")]
+                    if tray {
+                        use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+                        use windows::core::w;
+                        let err_msg = format!("未偵測到 WinFsp 核心驅動，且未在安裝目錄找到 winfsp-installer.msi。\n\n無法建立虛擬磁碟機代號 {}", norm_mount);
+                        let wide_err: Vec<u16> = err_msg.encode_utf16().chain(std::iter::once(0)).collect();
+                        unsafe {
+                            MessageBoxW(None, windows::core::PCWSTR(wide_err.as_ptr()), w!("Rust RAM Disk 錯誤"), MB_ICONERROR | MB_OK);
+                        }
+                    }
+                    return Err(anyhow::anyhow!("找不到 WinFsp 驅動與安裝套件，掛載中止"));
                 }
-                eprintln!("   2. 安裝完成後，重新執行本指令即可正常看見 {} 磁碟機。\n", norm_mount);
-                return Err(anyhow::anyhow!("WinFsp 核心驅動未安裝，掛載中止"));
             }
 
             // 2. 執行實體掛載

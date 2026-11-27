@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Rust RAM Disk Windows MSI 安裝套件打包腳本 (Build MSI Installer via WiX Toolset)
 
@@ -75,12 +75,15 @@ $StagingDir = Join-Path $env:TEMP "rust_ram_disk_msi_staging"
 if (Test-Path $StagingDir) { Remove-Item -Recurse -Force $StagingDir }
 New-Item -ItemType Directory -Force -Path $StagingDir | Out-Null
 
-$BuiltExe = Join-Path $ProjectRoot "target\release\rust_ram_disk.exe"
-if (-not (Test-Path $BuiltExe)) {
-    Write-Info "未偵測到最新 Release 執行檔，正在執行編譯..."
-    Set-Location $ProjectRoot
-    cargo build --release
+$CargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
+if (Test-Path $CargoBin) {
+    $env:PATH = "$CargoBin;$env:PATH"
 }
+
+$BuiltExe = Join-Path $ProjectRoot "target\release\rust_ram_disk.exe"
+Write-Info "正在編譯最新 Release 執行檔..."
+Set-Location $ProjectRoot
+cargo build --release --quiet
 
 # 確保 winfsp_bin 存在 (若無則自 winfsp-installer.msi 自動抽取)
 $WinfspBinDir = Join-Path $ProjectRoot "tools\winfsp_bin"
@@ -229,6 +232,17 @@ $WixXml = @"
       <ComponentRef Id="ApplicationShortcuts" />
       <ComponentRef Id="DesktopShortcutComponent" />
     </Feature>
+
+    <!-- Post-installation Launch Action: Auto-mount R: drive upon install -->
+    <CustomAction Id="LaunchApp" 
+                  Directory="INSTALLFOLDER" 
+                  ExeCommand="&quot;[INSTALLFOLDER]rust_ram_disk.exe&quot; mount -s 2G -m R: -c lz4 --tray" 
+                  Execute="immediate" 
+                  Return="asyncNoWait" />
+
+    <InstallExecuteSequence>
+      <Custom Action="LaunchApp" After="InstallFinalize">NOT Installed</Custom>
+    </InstallExecuteSequence>
   </Product>
 </Wix>
 "@
@@ -251,13 +265,70 @@ if ($LASTEXITCODE -ne 0) { throw "WiX light 連結失敗！" }
 
 Copy-Item $OutputMsi $OutputGenericMsi -Force
 
-# 6. 計算 SHA-256
+# 6. 建置一鍵式引導安裝套件 (WiX Burn Bootstrapper: RustRAMDiskSetup.exe)
+Write-Info ">>> [3/3] 建置整合式引導安裝檔 (WiX Burn Bootstrapper)..."
+$BundleWxsPath = Join-Path $StagingDir "Bundle.wxs"
+$BundleObj = Join-Path $StagingDir "Bundle.wixobj"
+$OutputSetupExe = Join-Path $OutDir "RustRAMDiskSetup-v$Version.exe"
+$OutputGenericSetupExe = Join-Path $OutDir "RustRAMDiskSetup.exe"
+
+$BundleXml = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:bal="http://schemas.microsoft.com/wix/BalExtension">
+  <Bundle Name="Rust RAM Disk" 
+          Version="$Version.0" 
+          Manufacturer="William Wang" 
+          UpgradeCode="{A1B2C3D4-5E6F-7A8B-9C0D-1E2F3A4B5C6D}">
+    <BootstrapperApplicationRef Id="WixStandardBootstrapperApplication.HyperlinkLicense">
+      <bal:WixStandardBootstrapperApplication LicenseUrl="" SuppressOptionsUI="yes" />
+    </BootstrapperApplicationRef>
+
+    <Chain>
+      <MsiPackage SourceFile="$StagingDir\winfsp-installer.msi" 
+                  DisplayName="WinFsp 檔案系統核心驅動" 
+                  Compressed="yes" 
+                  Vital="yes"
+                  Permanent="yes" />
+      <MsiPackage SourceFile="$OutputMsi" 
+                  DisplayName="Rust RAM Disk 主程式" 
+                  Compressed="yes" 
+                  Vital="yes" />
+    </Chain>
+  </Bundle>
+</Wix>
+"@
+
+$BundleXml | Out-File -FilePath $BundleWxsPath -Encoding utf8 -Force
+
+try {
+    & $Candle -arch x64 -nologo -ext WixBalExtension "$BundleWxsPath" -out "$BundleObj"
+    if ($LASTEXITCODE -eq 0) {
+        & $Light -nologo -ext WixBalExtension "$BundleObj" -out "$OutputSetupExe"
+        if ($LASTEXITCODE -eq 0) {
+            Copy-Item $OutputSetupExe $OutputGenericSetupExe -Force
+            Write-Ok "引導安裝檔建置成功: $OutputSetupExe"
+        }
+    }
+} catch {
+    Write-Warn "WiX Burn 建置略過: $($_.Exception.Message)"
+}
+
+# 7. 計算 SHA-256
 $Hash = (Get-FileHash -Path $OutputMsi -Algorithm SHA256).Hash.ToLower()
 Write-Info "MSI SHA-256: $Hash"
+if (Test-Path $OutputSetupExe) {
+    $ExeHash = (Get-FileHash -Path $OutputSetupExe -Algorithm SHA256).Hash.ToLower()
+    Write-Info "EXE SHA-256: $ExeHash"
+}
 
 Write-Info "=========================================================="
 Write-Ok "🎉 MSI 安裝套件封裝圓滿成功！"
-Write-Ok "產出檔案: $OutputMsi"
-Write-Ok "通用檔名: $OutputGenericMsi"
+Write-Ok "MSI 安裝檔: $OutputMsi"
+Write-Ok "MSI 通用檔: $OutputGenericMsi"
+if (Test-Path $OutputSetupExe) {
+    Write-Ok "EXE 引導檔: $OutputSetupExe"
+    Write-Ok "EXE 通用檔: $OutputGenericSetupExe"
+}
 Write-Ok "檔案大小: $((Get-Item $OutputMsi).Length / 1MB | ForEach-Object { '{0:N2} MB' -f $_ })"
 Write-Info "=========================================================="

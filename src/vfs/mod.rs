@@ -11,6 +11,15 @@ pub enum VfsError {
     #[error("WinFsp 核心驅動尚未安裝。請先執行 winfsp-installer.msi 註冊驅動。")]
     DriverNotInstalled,
 
+    #[error("找不到 WinFsp 核心安裝套件 (winfsp-installer.msi)")]
+    InstallerNotFound,
+
+    #[error("使用者取消了管理員提權授權 (UAC)")]
+    DriverInstallCancelled,
+
+    #[error("WinFsp 核心驅動安裝失敗 (結束代碼: {0})")]
+    DriverInstallFailed(u32),
+
     #[error("找不到 WinFsp 記憶體檔案系統可執行檔 (memfs-x64.exe)")]
     MemFsNotFound,
 
@@ -96,6 +105,84 @@ pub fn find_winfsp_installer() -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// 自動以管理員權限靜默執行 winfsp-installer.msi 進行驅動註冊
+pub fn install_winfsp_driver_silent() -> Result<(), VfsError> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::time::{Duration, Instant};
+        use windows::core::{HRESULT, PCWSTR};
+        use windows::Win32::Foundation::{CloseHandle, ERROR_CANCELLED};
+        use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+        use windows::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWDEFAULT;
+
+        let installer_path = find_winfsp_installer().ok_or(VfsError::InstallerNotFound)?;
+        let canonical = installer_path.canonicalize().unwrap_or(installer_path);
+        let path_str = canonical.to_string_lossy();
+        let clean_path = path_str.trim_start_matches(r"\\?\");
+
+        let verb: Vec<u16> = "runas\0".encode_utf16().collect();
+        let file: Vec<u16> = "msiexec.exe\0".encode_utf16().collect();
+        let params: Vec<u16> = format!("/i \"{}\" /qb /norestart\0", clean_path)
+            .encode_utf16()
+            .collect();
+
+        let mut sei = SHELLEXECUTEINFOW {
+            cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+            fMask: SEE_MASK_NOCLOSEPROCESS,
+            hwnd: Default::default(),
+            lpVerb: PCWSTR(verb.as_ptr()),
+            lpFile: PCWSTR(file.as_ptr()),
+            lpParameters: PCWSTR(params.as_ptr()),
+            lpDirectory: PCWSTR::null(),
+            nShow: SW_SHOWDEFAULT.0 as i32,
+            ..Default::default()
+        };
+
+        if let Err(err) = unsafe { ShellExecuteExW(&mut sei) } {
+            if err.code() == HRESULT::from_win32(ERROR_CANCELLED.0) {
+                return Err(VfsError::DriverInstallCancelled);
+            }
+            return Err(VfsError::ProcessLaunch(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                err.to_string(),
+            )));
+        }
+
+        if !sei.hProcess.is_invalid() {
+            unsafe {
+                let _ = WaitForSingleObject(sei.hProcess, 60_000);
+                let mut exit_code = 0u32;
+                let _ = GetExitCodeProcess(sei.hProcess, &mut exit_code);
+                let _ = CloseHandle(sei.hProcess);
+
+                if exit_code != 0 && exit_code != 3010 {
+                    return Err(VfsError::DriverInstallFailed(exit_code));
+                }
+            }
+        }
+
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(5) {
+            if is_driver_installed() {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+
+        if is_driver_installed() {
+            Ok(())
+        } else {
+            Err(VfsError::DriverNotInstalled)
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err(VfsError::DriverNotInstalled)
+    }
 }
 
 /// 尋找 WinFsp memfs-x64.exe 二進位檔
