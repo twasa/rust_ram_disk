@@ -233,48 +233,35 @@ fn main() -> anyhow::Result<()> {
                 }
             }
 
-            // 1. 驅動環境檢核與自動註冊修復
+            // 1. 檢核管理員權限 (Mount Manager 本機實體硬碟掛載需要管理員授權)
+            // 若非管理員，直接以 UAC 提權重啟 (避免彈出多餘中繼提示對話框，使用者在 Windows 原生 UAC 點選【是】即可)
+            #[cfg(target_os = "windows")]
+            if !vfs::is_elevated() {
+                vfs::relaunch_elevated()?;
+                return Ok(());
+            }
+
+            // 2. 驅動環境檢核與自動註冊修復 (此時已處於管理員提權狀態，可直接完成驅動部署)
             if !vfs::is_driver_installed() {
-                println!("🔍 系統尚未註冊 WinFsp 核心檔案系統代理驅動 (winfsp.sys)...");
+                tracing::info!("系統尚未註冊 WinFsp 核心檔案系統代理驅動 (winfsp.sys)，正在執行自動註冊...");
                 if let Some(installer) = vfs::find_winfsp_installer() {
-                    println!("📦 偵測到驅動安裝套件: {}", installer.display());
-                    println!("🚀 正在為您自動完成 WinFsp 核心驅動註冊 (請在 UAC 提示中確認)...");
-
-                    #[cfg(target_os = "windows")]
-                    if tray {
-                        use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OKCANCEL, IDOK};
-                        use windows::core::w;
-                        let msg = format!(
-                            "未偵測到 WinFsp 核心檔案系統代理驅動程式 (winfsp.sys)。\n\n\
-                            Rust RAM Disk 需要 WinFsp 核心驅動以建立虛擬磁碟機代號 ({})。\n\n\
-                            點選【確定】將自動為您啟動驅動程式安裝程序 (請在接下來的 Windows 提示中點選【是】)。",
-                            norm_mount
-                        );
-                        let wide_msg: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
-                        let ret = unsafe {
-                            MessageBoxW(
-                                None,
-                                windows::core::PCWSTR(wide_msg.as_ptr()),
-                                w!("Rust RAM Disk - 核心驅動程式設定"),
-                                MB_ICONINFORMATION | MB_OKCANCEL,
-                            )
-                        };
-                        if ret != IDOK {
-                            return Err(anyhow::anyhow!("使用者取消驅動程式安裝，掛載中止"));
-                        }
-                    }
-
+                    tracing::info!("偵測到 WinFsp 驅動安裝套件: {}", installer.display());
                     match vfs::install_winfsp_driver_silent() {
                         Ok(_) => {
-                            println!("🎉 WinFsp 核心驅動已成功註冊完成！");
+                            tracing::info!("WinFsp 核心驅動已成功註冊完成！");
                         }
                         Err(e) => {
-                            eprintln!("❌ 自動安裝驅動失敗: {}", e);
+                            tracing::error!("自動安裝驅動失敗: {}", e);
                             #[cfg(target_os = "windows")]
                             if tray {
                                 use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
                                 use windows::core::w;
-                                let err_msg = format!("WinFsp 核心驅動安裝未完成: {}\n\n無法建立虛擬磁碟機代號 {}", e, norm_mount);
+                                let err_msg = format!(
+                                    "WinFsp 核心檔案系統驅動程式安裝失敗: {}\n\n\
+                                    虛擬磁碟機 {} 需要 WinFsp 核心驅動方能掛載。\n\n\
+                                    請嘗試以管理員權限執行安裝目錄下的 winfsp-installer.msi 重新安裝。",
+                                    e, norm_mount
+                                );
                                 let wide_err: Vec<u16> = err_msg.encode_utf16().chain(std::iter::once(0)).collect();
                                 unsafe {
                                     MessageBoxW(None, windows::core::PCWSTR(wide_err.as_ptr()), w!("Rust RAM Disk 錯誤"), MB_ICONERROR | MB_OK);
@@ -284,13 +271,16 @@ fn main() -> anyhow::Result<()> {
                         }
                     }
                 } else {
-                    eprintln!("\n❌ 錯誤：未偵測到已安裝之 WinFsp 核心檔案系統代理驅動，且找不到安裝套件！");
-                    eprintln!("   請先執行專案安裝套件 (RustRAMDisk.msi) 完整安裝驅動程式。\n");
                     #[cfg(target_os = "windows")]
                     if tray {
                         use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
                         use windows::core::w;
-                        let err_msg = format!("未偵測到 WinFsp 核心驅動，且未在安裝目錄找到 winfsp-installer.msi。\n\n無法建立虛擬磁碟機代號 {}", norm_mount);
+                        let err_msg = format!(
+                            "未偵測到 WinFsp 核心驅動 (winfsp.sys)，且在安裝目錄找不到 winfsp-installer.msi。\n\n\
+                            無法建立虛擬磁碟機代號 {}。\n\n\
+                            請重新執行 Rust RAM Disk 安裝程式修復安裝。",
+                            norm_mount
+                        );
                         let wide_err: Vec<u16> = err_msg.encode_utf16().chain(std::iter::once(0)).collect();
                         unsafe {
                             MessageBoxW(None, windows::core::PCWSTR(wide_err.as_ptr()), w!("Rust RAM Disk 錯誤"), MB_ICONERROR | MB_OK);
@@ -300,47 +290,34 @@ fn main() -> anyhow::Result<()> {
                 }
             }
 
-            // 2. 檢核管理員權限 (Mount Manager 本機實體硬碟掛載需要管理員授權)
-            #[cfg(target_os = "windows")]
-            if !vfs::is_elevated() {
-                println!("🛡️ 為了將 RAM Disk 註冊為 Windows 本機實體硬碟 (Local Disk)，需要管理員權限...");
-                if tray {
-                    use windows::core::w;
-                    use windows::Win32::UI::WindowsAndMessaging::{
-                        MessageBoxW, IDOK, MB_ICONINFORMATION, MB_OKCANCEL,
-                    };
-                    let msg = format!(
-                        "Rust RAM Disk 即將把虛擬磁碟機 ({}) 註冊為 Windows 本機實體硬碟 (Local Disk)。\n\n\
-                        本機硬碟模式可完美支援各類免安裝軟體執行與檔案預覽，此操作需要 Windows 管理員授權。\n\n\
-                        點選【確定】將為您開啟 Windows 授權提示 (請在接下來的畫面點選【是】)。",
-                        norm_mount
-                    );
-                    let wide_msg: Vec<u16> =
-                        msg.encode_utf16().chain(std::iter::once(0)).collect();
-                    let ret = unsafe {
-                        MessageBoxW(
-                            None,
-                            windows::core::PCWSTR(wide_msg.as_ptr()),
-                            w!("Rust RAM Disk - 系統管理員權限需求"),
-                            MB_ICONINFORMATION | MB_OKCANCEL,
-                        )
-                    };
-                    if ret != IDOK {
-                        return Err(anyhow::anyhow!("使用者取消管理員提權授權，掛載中止"));
-                    }
-                }
-                vfs::relaunch_elevated()?;
-                return Ok(());
-            }
-
             // 3. 執行實體掛載
             let mut current_norm_mount = norm_mount.clone();
             let mut current_size = size.clone();
             let mut current_compress = compress;
             let mut current_image = image.clone();
 
-            let mut mount_handle = vfs::mount_ram_disk(&current_norm_mount, capacity)
-                .map_err(|e| anyhow::anyhow!("掛載失敗: {}", e))?;
+            let mut mount_handle = match vfs::mount_ram_disk(&current_norm_mount, capacity) {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::error!("掛載失敗: {}", e);
+                    #[cfg(target_os = "windows")]
+                    if tray {
+                        use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+                        use windows::core::w;
+                        let err_msg = format!(
+                            "掛載虛擬磁碟機失敗: {}\n\n\
+                            目標磁碟機代號: {}\n\n\
+                            請確認該磁碟機代號未被其他硬碟、隨身碟或網路磁碟佔用，且 WinFsp 驅動正常運作。",
+                            e, current_norm_mount
+                        );
+                        let wide_err: Vec<u16> = err_msg.encode_utf16().chain(std::iter::once(0)).collect();
+                        unsafe {
+                            MessageBoxW(None, windows::core::PCWSTR(wide_err.as_ptr()), w!("Rust RAM Disk 掛載失敗"), MB_ICONERROR | MB_OK);
+                        }
+                    }
+                    return Err(anyhow::anyhow!("掛載失敗: {}", e));
+                }
+            };
 
             println!("🎉 虛擬磁碟機 {} 已成功掛載！", current_norm_mount);
             println!("   您現在可在 Windows 檔案總管與命令列直接讀寫磁碟機 {}。", current_norm_mount);
