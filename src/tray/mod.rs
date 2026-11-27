@@ -16,6 +16,7 @@ pub struct TrayManager {
     _tray_icon: TrayIcon,
     _menu: Menu,
     pub status_item: MenuItem,
+    pub settings_item: MenuItem,
     pub snapshot_item: MenuItem,
     pub unmount_item: MenuItem,
     pub exit_item: MenuItem,
@@ -27,6 +28,7 @@ impl TrayManager {
 
         let status_text = format!("{}: {} ({})", app_name, mount_point, capacity_str);
         let status_item = MenuItem::new(&status_text, false, None);
+        let settings_item = MenuItem::new("⚙️ 磁碟設定 (Settings)...", true, None);
         let separator1 = PredefinedMenuItem::separator();
         let snapshot_item = MenuItem::new("💾 立即儲存快照 (Save Snapshot)", true, None);
         let unmount_item = MenuItem::new("⏏️ 卸載磁碟 (Unmount)", true, None);
@@ -34,6 +36,7 @@ impl TrayManager {
         let exit_item = MenuItem::new("❌ 結束 (Exit)", true, None);
 
         menu.append(&status_item)?;
+        menu.append(&settings_item)?;
         menu.append(&separator1)?;
         menu.append(&snapshot_item)?;
         menu.append(&unmount_item)?;
@@ -54,10 +57,15 @@ impl TrayManager {
             _tray_icon: tray_icon,
             _menu: menu,
             status_item,
+            settings_item,
             snapshot_item,
             unmount_item,
             exit_item,
         })
+    }
+
+    pub fn tray_icon(&self) -> &TrayIcon {
+        &self._tray_icon
     }
 
     /// Dynamically update the status line in the tray menu.

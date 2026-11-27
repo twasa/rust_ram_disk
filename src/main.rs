@@ -301,19 +301,24 @@ fn main() -> anyhow::Result<()> {
             }
 
             // 2. 執行實體掛載
-            let mut mount_handle = vfs::mount_ram_disk(&norm_mount, capacity)
+            let mut current_norm_mount = norm_mount.clone();
+            let mut current_size = size.clone();
+            let mut current_compress = compress;
+            let mut current_image = image.clone();
+
+            let mut mount_handle = vfs::mount_ram_disk(&current_norm_mount, capacity)
                 .map_err(|e| anyhow::anyhow!("掛載失敗: {}", e))?;
 
-            println!("🎉 虛擬磁碟機 {} 已成功掛載！", norm_mount);
-            println!("   您現在可在 Windows 檔案總管與命令列直接讀寫磁碟機 {}。", norm_mount);
+            println!("🎉 虛擬磁碟機 {} 已成功掛載！", current_norm_mount);
+            println!("   您現在可在 Windows 檔案總管與命令列直接讀寫磁碟機 {}。", current_norm_mount);
 
             // 3. 還原快照 (若指定且檔案存在)
-            if let Some(ref img_path) = image {
+            if let Some(ref img_path) = current_image {
                 if img_path.exists() {
                     println!("💾 正在還原快照映像檔: {:?}", img_path);
-                    match ImagePersistence::restore_drive_snapshot(img_path, &norm_mount) {
+                    match ImagePersistence::restore_drive_snapshot(img_path, &current_norm_mount) {
                         Ok(count) => {
-                            println!("✅ 快照還原完成！共還原 {} 個檔案至 {}", count, norm_mount)
+                            println!("✅ 快照還原完成！共還原 {} 個檔案至 {}", count, current_norm_mount)
                         }
                         Err(e) => warn!("還原快照時發生錯誤: {}", e),
                     }
@@ -325,13 +330,15 @@ fn main() -> anyhow::Result<()> {
                 #[cfg(target_os = "windows")]
                 {
                     use rust_ram_disk::tray::TrayManager;
+                    use rust_ram_disk::ui::settings::{self, SettingsConfig, WM_APP_APPLY_SETTINGS};
                     use windows::core::{w, PCWSTR};
                     use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
                     use windows::Win32::UI::WindowsAndMessaging::{
                         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-                        MsgWaitForMultipleObjects, PeekMessageW, RegisterClassExW, RegisterWindowMessageW,
-                        TranslateMessage, MSG, PM_REMOVE, QS_ALLINPUT, WNDCLASSEXW, WM_APP,
-                        WINDOW_EX_STYLE, WINDOW_STYLE,
+                        MessageBoxW, MsgWaitForMultipleObjects, PeekMessageW, RegisterClassExW,
+                        RegisterWindowMessageW, TranslateMessage, MB_ICONERROR, MB_ICONINFORMATION,
+                        MB_OK, MSG, PM_REMOVE, QS_ALLINPUT, WNDCLASSEXW, WM_APP, WINDOW_EX_STYLE,
+                        WINDOW_STYLE,
                     };
 
                     const WM_APP_RELOAD_TRAY: u32 = WM_APP + 101;
@@ -358,7 +365,7 @@ fn main() -> anyhow::Result<()> {
                         let _ = RegisterClassExW(&wc);
                     }
 
-                    let host_title = format!("RustRAMDisk_Host_{}\0", norm_mount.trim_end_matches(':'));
+                    let host_title = format!("RustRAMDisk_Host_{}\0", current_norm_mount.trim_end_matches(':'));
                     let wide_title: Vec<u16> = host_title.encode_utf16().collect();
                     let host_hwnd = unsafe {
                         CreateWindowExW(
@@ -381,21 +388,38 @@ fn main() -> anyhow::Result<()> {
                     let taskbar_created_msg = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
 
                     let mut tray_manager =
-                        TrayManager::new("Rust RAM Disk", &norm_mount, &size)?;
+                        TrayManager::new("Rust RAM Disk", &current_norm_mount, &current_size)?;
                     let mut menu_channel = muda::MenuEvent::receiver();
+                    let tray_channel = tray_icon::TrayIconEvent::receiver();
                     println!("\n📌 系統匣圖示 (Systray) 已在右下角常駐。");
-                    println!("   右鍵點擊系統匣圖示可隨時儲存快照、卸載磁碟或退出程式。");
+                    println!("   左鍵點擊圖示可開啟「設定畫面」，右鍵可快速儲存快照、卸載或結束。");
+
+                    let open_settings = |h_opt: Option<HWND>, mount: &str, sz: &str, cp: CliCompression, img: &Option<PathBuf>| {
+                        if let Some(h) = h_opt {
+                            let cfg = SettingsConfig {
+                                mount_point: mount.to_string(),
+                                size: sz.to_string(),
+                                compress: match cp {
+                                    CliCompression::Lz4 => "lz4".to_string(),
+                                    CliCompression::None => "none".to_string(),
+                                },
+                                image_path: img.as_ref().map(|p| p.to_string_lossy().to_string()),
+                                auto_start: false,
+                            };
+                            settings::show_settings_window(h, &cfg);
+                        }
+                    };
 
                     let mut running = true;
                     while running {
                         let mut msg = MSG::default();
                         while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
-                            // 檢查是否收到「再次執行重載」或「Explorer 重新啟動 (TaskbarCreated)」通知
+                            // 1. 檢查是否收到「再次執行重載」或「Explorer 重新啟動 (TaskbarCreated)」通知
                             if msg.message == WM_APP_RELOAD_TRAY
                                 || (taskbar_created_msg != 0 && msg.message == taskbar_created_msg)
                             {
                                 tracing::info!("收到系統匣重載或工作列重建通知，正在重新整理圖示...");
-                                match TrayManager::new("Rust RAM Disk", &norm_mount, &size) {
+                                match TrayManager::new("Rust RAM Disk", &current_norm_mount, &current_size) {
                                     Ok(new_tm) => {
                                         tray_manager = new_tm;
                                         menu_channel = muda::MenuEvent::receiver();
@@ -406,6 +430,125 @@ fn main() -> anyhow::Result<()> {
                                     }
                                 }
                             }
+                            // 2. 檢查是否收到「套用設定並重新掛載」訊息
+                            else if msg.message == WM_APP_APPLY_SETTINGS {
+                                if let Some(new_cfg) = settings::take_pending_config() {
+                                    println!("\n⚙️ 收到重新配置指令，正在進行動態套用與重新掛載...");
+                                    println!("   新磁碟代號: {}", new_cfg.mount_point);
+                                    println!("   新容量:     {}", new_cfg.size);
+                                    println!("   新壓縮模式: {}", new_cfg.compress);
+
+                                    let new_cap_res = parse_size(&new_cfg.size);
+                                    let new_norm_res = vfs::normalize_mount_point(&new_cfg.mount_point);
+
+                                    match (new_cap_res, new_norm_res) {
+                                        (Ok(new_cap), Ok(new_norm)) => {
+                                            if let Some(ref old_img) = current_image {
+                                                println!("💾 卸載前先儲存目前快照至: {:?}", old_img);
+                                                let _ = ImagePersistence::save_drive_snapshot(
+                                                    &current_norm_mount,
+                                                    old_img,
+                                                    current_compress.into(),
+                                                );
+                                            }
+
+                                            println!("⏏️ 正在安全卸載目前磁碟機 {}...", current_norm_mount);
+                                            let _ = mount_handle.unmount();
+
+                                            match vfs::mount_ram_disk(&new_norm, new_cap) {
+                                                Ok(new_handle) => {
+                                                    mount_handle = new_handle;
+                                                    current_norm_mount = new_norm.clone();
+                                                    current_size = new_cfg.size.clone();
+                                                    current_compress = if new_cfg.compress == "none" {
+                                                        CliCompression::None
+                                                    } else {
+                                                        CliCompression::Lz4
+                                                    };
+                                                    current_image = new_cfg.image_path.as_ref().map(PathBuf::from);
+
+                                                    if let Some(ref img_path) = current_image {
+                                                        if img_path.exists() {
+                                                            println!("💾 正在還原快照映像檔: {:?}", img_path);
+                                                            let _ = ImagePersistence::restore_drive_snapshot(
+                                                                img_path,
+                                                                &current_norm_mount,
+                                                            );
+                                                        }
+                                                    }
+
+                                                    let new_status_text = format!(
+                                                        "Rust RAM Disk: {} ({})",
+                                                        current_norm_mount, current_size
+                                                    );
+                                                    tray_manager.status_item.set_text(&new_status_text);
+                                                    let _ = tray_manager.tray_icon().set_tooltip(Some(format!(
+                                                        "Rust RAM Disk - {}",
+                                                        current_norm_mount
+                                                    )));
+
+                                                    println!(
+                                                        "🎉 虛擬磁碟機已成功重新掛載為 {} (容量: {})！",
+                                                        current_norm_mount, current_size
+                                                    );
+
+                                                    let tip = format!(
+                                                        "虛擬磁碟機已成功重新掛載！\n\n磁碟代號：{}\n容量大小：{}\n壓縮模式：{}",
+                                                        current_norm_mount, current_size, new_cfg.compress
+                                                    );
+                                                    let wide_tip: Vec<u16> = tip
+                                                        .encode_utf16()
+                                                        .chain(std::iter::once(0))
+                                                        .collect();
+                                                    unsafe {
+                                                        MessageBoxW(
+                                                            None,
+                                                            PCWSTR(wide_tip.as_ptr()),
+                                                            w!("Rust RAM Disk - 設定已套用"),
+                                                            MB_ICONINFORMATION | MB_OK,
+                                                        );
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    error!("重新掛載失敗: {}", e);
+                                                    let err_tip = format!("重新掛載磁碟機 {} 失敗: {}\n\n請確認磁碟代號未被佔用。", new_norm, e);
+                                                    let wide_err: Vec<u16> = err_tip
+                                                        .encode_utf16()
+                                                        .chain(std::iter::once(0))
+                                                        .collect();
+                                                    unsafe {
+                                                        MessageBoxW(
+                                                            None,
+                                                            PCWSTR(wide_err.as_ptr()),
+                                                            w!("Rust RAM Disk 錯誤"),
+                                                            MB_ICONERROR | MB_OK,
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        (Err(e), _) => {
+                                            error!("容量格式錯誤: {}", e);
+                                            let err_tip = format!("容量格式無效: {}\n請使用例如 1G, 2G, 512M", e);
+                                            let wide_err: Vec<u16> = err_tip
+                                                .encode_utf16()
+                                                .chain(std::iter::once(0))
+                                                .collect();
+                                            unsafe {
+                                                MessageBoxW(
+                                                    None,
+                                                    PCWSTR(wide_err.as_ptr()),
+                                                    w!("Rust RAM Disk 錯誤"),
+                                                    MB_ICONERROR | MB_OK,
+                                                );
+                                            }
+                                        }
+                                        (_, Err(e)) => {
+                                            error!("磁碟代號格式錯誤: {}", e);
+                                        }
+                                    }
+                                }
+                            }
 
                             unsafe {
                                 let _ = TranslateMessage(&msg);
@@ -413,6 +556,31 @@ fn main() -> anyhow::Result<()> {
                             }
                         }
 
+                        // 3. 處理系統匣滑鼠點擊事件 (左鍵單擊/雙擊開啟設定畫面)
+                        while let Ok(tray_event) = tray_channel.try_recv() {
+                            match tray_event {
+                                tray_icon::TrayIconEvent::Click {
+                                    button: tray_icon::MouseButton::Left,
+                                    button_state: tray_icon::MouseButtonState::Up,
+                                    ..
+                                }
+                                | tray_icon::TrayIconEvent::DoubleClick {
+                                    button: tray_icon::MouseButton::Left,
+                                    ..
+                                } => {
+                                    open_settings(
+                                        host_hwnd,
+                                        &current_norm_mount,
+                                        &current_size,
+                                        current_compress,
+                                        &current_image,
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        // 4. 處理系統匣右鍵選單項目點擊
                         while let Ok(event) = menu_channel.try_recv() {
                             if event.id == tray_manager.exit_item.id()
                                 || event.id == tray_manager.unmount_item.id()
@@ -420,14 +588,22 @@ fn main() -> anyhow::Result<()> {
                                 println!("🛑 收到系統匣卸載與退出指令。");
                                 running = false;
                                 break;
+                            } else if event.id == tray_manager.settings_item.id() {
+                                open_settings(
+                                    host_hwnd,
+                                    &current_norm_mount,
+                                    &current_size,
+                                    current_compress,
+                                    &current_image,
+                                );
                             } else if event.id == tray_manager.snapshot_item.id() {
-                                let target_img = image
+                                let target_img = current_image
                                     .as_deref()
                                     .unwrap_or_else(|| Path::new("ramdisk_snapshot.img"));
                                 match ImagePersistence::save_drive_snapshot(
-                                    &norm_mount,
+                                    &current_norm_mount,
                                     target_img,
-                                    compress.into(),
+                                    current_compress.into(),
                                 ) {
                                     Ok(count) => println!(
                                         "💾 快照儲存完成！已打包 {} 個檔案至 {:?}",
@@ -468,10 +644,10 @@ fn main() -> anyhow::Result<()> {
             }
 
             // 5. 結束前自動回存快照與安全卸載
-            if let Some(ref img_path) = image {
+            if let Some(ref img_path) = current_image {
                 println!("💾 退出前自動儲存最新快照至: {:?}", img_path);
                 if let Err(e) =
-                    ImagePersistence::save_drive_snapshot(&norm_mount, img_path, compress.into())
+                    ImagePersistence::save_drive_snapshot(&current_norm_mount, img_path, current_compress.into())
                 {
                     error!("自動儲存快照失敗: {}", e);
                 } else {
@@ -479,9 +655,9 @@ fn main() -> anyhow::Result<()> {
                 }
             }
 
-            println!("⏏️ 正在安全卸載磁碟機 {}...", norm_mount);
+            println!("⏏️ 正在安全卸載磁碟機 {}...", current_norm_mount);
             let _ = mount_handle.unmount();
-            println!("✅ 磁碟機 {} 已完全卸載，程式結束。", norm_mount);
+            println!("✅ 磁碟機 {} 已完全卸載，程式結束。", current_norm_mount);
         }
     }
 

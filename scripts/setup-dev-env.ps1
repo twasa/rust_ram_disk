@@ -58,7 +58,7 @@ Write-Info "目標 Rust 版本基準: $RustVersion"
 Write-Info "=========================================================="
 
 # 1. 檢核 Rust 工具鏈 (rustc / cargo / rustup)
-Write-Info ">>> [1/4] 檢查 Rust 語言工具鏈..."
+Write-Info ">>> [1/5] 檢查 Rust 語言工具鏈..."
 $rustc = Get-Command "rustc" -ErrorAction SilentlyContinue
 $cargo = Get-Command "cargo" -ErrorAction SilentlyContinue
 
@@ -68,35 +68,89 @@ if ($rustc -and $cargo) {
     $cargoVer = (& $cargo.Source --version)
     Write-Ok "Cargo 套件管理員就緒: $cargoVer"
 } else {
-    Write-Warn "未偵測到完整 Rust 工具鏈！"
+    Write-Warn "未於目前 PATH 偵測到完整 Rust 工具鏈！"
     if (-not $CheckOnly) {
-        Write-Info "正在嘗試透過 winget 或官方安裝導引配置 rustup..."
-        $winget = Get-Command "winget" -ErrorAction SilentlyContinue
-        if ($winget) {
-            Start-Process $winget.Source -ArgumentList "install", "Rustlang.Rustup", "--silent", "--accept-package-agreements" -Wait
+        $rustupExe = Join-Path $CargoBinDir "rustup.exe"
+        if (Test-Path $rustupExe) {
+            Write-Info "偵測到 rustup，正在確認並切換至定版工具鏈 $RustVersion..."
+            & $rustupExe toolchain install $RustVersion --profile minimal
+            & $rustupExe default $RustVersion
         } else {
-            Write-Err "請至 https://rustup.rs 下載安裝 rustup-init.exe 配置 Rust 環境。"
+            Write-Info "正在自動下載並安裝 rustup 官方工具鏈 (定版: $RustVersion)..."
+            $rustupInit = Join-Path $env:TEMP "rustup-init.exe"
+            if (-not (Test-Path $rustupInit)) {
+                try {
+                    Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile $rustupInit
+                } catch {
+                    curl.exe -L -o $rustupInit "https://win.rustup.rs/x86_64"
+                }
+            }
+            if (Test-Path $rustupInit) {
+                & $rustupInit -y --default-toolchain $RustVersion --profile minimal
+            } else {
+                Write-Err "無法下載 rustup-init.exe，請至 https://rustup.rs 手動安裝。"
+            }
+        }
+
+        # 刷新 Session PATH 並再次檢查
+        if (($env:Path -split [regex]::Escape($PathSep)) -notcontains $CargoBinDir) {
+            $env:Path = "$CargoBinDir$PathSep$env:Path"
+        }
+        $rustc = Get-Command "rustc" -ErrorAction SilentlyContinue
+        $cargo = Get-Command "cargo" -ErrorAction SilentlyContinue
+        if ($rustc -and $cargo) {
+            Write-Ok "Rust 工具鏈配置完成: $(& $rustc.Source --version) / $(& $cargo.Source --version)"
         }
     }
 }
 
-# 2. 檢核 MSVC C++ 建置工具 (link.exe)
-Write-Info "`n>>> [2/4] 檢查 Visual Studio C++ 工具鏈 (MSVC Linker)..."
+# 2. 檢核 MSVC C++ 建置工具 (link.exe / VS Build Tools)
+Write-Info "`n>>> [2/5] 檢查 Visual Studio C++ 工具鏈 (MSVC Linker)..."
 $linker = Get-Command "link.exe" -ErrorAction SilentlyContinue
-if ($linker) {
-    Write-Ok "MSVC Linker 就緒: $($linker.Source)"
-} else {
-    # 檢查是否有 VS 安裝在標準路徑
-    $vsPath = "C:\Program Files\Microsoft Visual Studio"
-    if (Test-Path $vsPath) {
-        Write-Ok "Visual Studio 已安裝於 $vsPath"
-    } else {
-        Write-Warn "未於 PATH 中直接找到 link.exe。若建置報錯，請確保已安裝 Visual Studio C++ Build Tools。"
+$vsWhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+$hasVcTools = $false
+
+if (Test-Path $vsWhere) {
+    $vcInstall = & $vsWhere -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    if ($vcInstall) {
+        $hasVcTools = $true
+        Write-Ok "已偵測到 Visual Studio C++ Build Tools: $vcInstall"
     }
 }
 
-# 3. 檢核 WinFsp 核心檔案系統代理驅動
-Write-Info "`n>>> [3/4] 檢查 WinFsp (Windows File System Proxy) 驅動與執行環境..."
+if ($linker) {
+    Write-Ok "MSVC Linker 就緒: $($linker.Source)"
+} elseif ($hasVcTools) {
+    Write-Ok "Visual Studio C++ 建置環境已就緒 (可透過 MSVC 構建環境或 VS Developer Prompt 使用)。"
+} else {
+    Write-Warn "未偵測到 Visual Studio C++ Build Tools (link.exe)。"
+    Write-Info "若編譯遇到 C++ 連結錯誤，可至 https://visualstudio.microsoft.com/visual-cpp-build-tools/ 安裝 C++ 建置工具。"
+}
+
+# 3. 檢核 WiX Toolset 打包工具 (candle.exe + light.exe)
+Write-Info "`n>>> [3/5] 檢查 WiX Toolset 安裝套件編譯器 (tools/wix)..."
+$wixDir = Join-Path $ProjectRoot "tools\wix"
+$candle = Join-Path $wixDir "candle.exe"
+$light = Join-Path $wixDir "light.exe"
+
+if ((Test-Path $candle) -and (Test-Path $light)) {
+    Write-Ok "WiX Toolset 就緒: $candle / $light"
+} else {
+    Write-Warn "專案內部未配置 WiX Toolset 二進位檔！"
+    if (-not $CheckOnly) {
+        Write-Info "正在自動下載並配置 WiX Toolset 3.11 綠色工具包至 tools/wix..."
+        if (-not (Test-Path $wixDir)) { New-Item -ItemType Directory -Force -Path $wixDir | Out-Null }
+        $wixZip = "$env:TEMP\wix311-binaries.zip"
+        if (-not (Test-Path $wixZip)) {
+            curl.exe -L -o $wixZip "https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311-binaries.zip"
+        }
+        Expand-Archive -Path $wixZip -DestinationPath $wixDir -Force
+        Write-Ok "WiX Toolset 下載並解壓完成！"
+    }
+}
+
+# 4. 檢核 WinFsp 核心檔案系統代理驅動
+Write-Info "`n>>> [4/5] 檢查 WinFsp (Windows File System Proxy) 驅動與執行環境..."
 $winFspInstalled = $false
 $regKeys = @(
     "HKLM:\SOFTWARE\WinFsp",
@@ -138,8 +192,8 @@ if (-not $winFspInstalled) {
     }
 }
 
-# 4. 檢核 LLVM / Clang (可選進階項目)
-Write-Info "`n>>> [4/4] 檢查 LLVM / Clang 工具鏈狀態 (可選)..."
+# 5. 檢核 LLVM / Clang (可選進階項目)
+Write-Info "`n>>> [5/5] 檢查 LLVM / Clang 工具鏈狀態 (可選)..."
 $clang = Get-Command "clang" -ErrorAction SilentlyContinue
 if ($clang) {
     $clangVer = (& $clang.Source --version | Select-Object -First 1)

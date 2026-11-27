@@ -7,7 +7,12 @@
 - **動態稀疏分頁（Sparse Memory Paging）**：未寫入區塊不佔用實體 RAM，寫入時按需（On-Demand）配置記憶體分頁。
 - **透明壓縮（LZ4 Compression）**：可選區塊級即時壓縮，大幅節省實體 RAM 佔用（可達 5x~45x 記憶體節省）並提升整體快取容量。
 - **持久化快照（Snapshot & Image Persistence）**：支援一鍵或排程將記憶體狀態同步寫入 SSD 映像檔（`.img`），下次啟動時無縫載入。
-- **系統匣整合（Windows Systray）**：右下角常駐圖示，即時顯示記憶體使用率、快速一鍵儲存快照、卸載與結束操作。
+- **系統匣整合與原生設定介面（Windows Systray & Settings UI）**：
+  - 右下角常駐圖示，即時顯示磁碟機代號與記憶體容量。
+  - **純 Win32 原生設定視窗**：左鍵點擊圖示或右鍵點選「⚙️ 磁碟設定」即可叫出設定介面，零額外 GUI 依賴、瞬間啟動。
+  - **動態重新配置（Apply & Remount）**：可於運作中即時切換磁碟機代號（`R:`, `S:`, `T:` 等）、變更容量（`512M` 至 `64G` 或自訂）、切換壓縮演算法（LZ4 / None）、選擇快照映像檔路徑，以及勾選「開機自動背景掛載（Run 登錄檔）」。
+  - **安全熱切換**：套用時自動儲存現有快照至映像檔、卸載舊磁碟並以新參數無縫重掛，隨後即時更新系統匣狀態與 Windows 檔案總管。
+  - **快速選單**：右鍵選單提供即時快照存檔、安全卸載與退出功能。
 
 ## 📊 實測基準效能 (In-Memory Benchmark)
 在 512 MB 虛擬記憶體磁碟上的實測表現（AMD/Intel x64）：
@@ -24,9 +29,13 @@
 比照專案工程規範，於 `scripts/` 提供一鍵環境配置、本地部署與發布打包腳本：
 
 ### 1. 環境檢核與安裝導引 (`setup-dev-env.ps1`)
+具備自動引導與無套件管理器備援機制（當系統無 `winget` 時自動下載官方 `rustup-init.exe` 靜默安裝、自動檢測 Visual Studio C++ Build Tools，並自動就緒 WiX Toolset 3.11）：
 ```powershell
-# 檢核環境工具鏈狀態（Rust、MSVC、WinFsp 驅動與登錄檔）
+# 檢核環境工具鏈狀態（Rust、MSVC、WinFsp 驅動與登錄檔、WiX 工具）
 ./scripts/setup-dev-env.ps1 -CheckOnly
+
+# 全自動引導安裝缺失之 Rust 工具鏈與 WiX
+./scripts/setup-dev-env.ps1
 
 # 自動啟動專案內建之 WinFsp 安裝精靈註冊驅動
 ./scripts/setup-dev-env.ps1 -InstallWinFsp
