@@ -34,6 +34,14 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
 $OutDir = Join-Path $ProjectRoot "release-artifacts"
 $ToolsDir = Join-Path $ProjectRoot "tools"
+if (-not (Test-Path (Join-Path $ToolsDir "winfsp-installer.msi"))) {
+    $parentRepo = Split-Path (Split-Path $ProjectRoot -Parent) -Parent
+    $parentTools = Join-Path $parentRepo "tools"
+    if (Test-Path (Join-Path $parentTools "winfsp-installer.msi")) {
+        $ToolsDir = $parentTools
+        Write-Info "已偵測並共用主儲存庫之相依工具目錄: $ToolsDir"
+    }
+}
 $WixDir = Join-Path $ToolsDir "wix"
 
 # 1. 檢查版號
@@ -86,10 +94,10 @@ Set-Location $ProjectRoot
 cargo build --release --quiet
 
 # 確保 winfsp_bin 存在 (若無則自 winfsp-installer.msi 自動抽取)
-$WinfspBinDir = Join-Path $ProjectRoot "tools\winfsp_bin"
+$WinfspBinDir = Join-Path $ToolsDir "winfsp_bin"
 $MemfsBin = Join-Path $WinfspBinDir "memfs-x64.exe"
 if (-not (Test-Path $MemfsBin)) {
-    $InstallerMsi = Join-Path $ProjectRoot "tools\winfsp-installer.msi"
+    $InstallerMsi = Join-Path $ToolsDir "winfsp-installer.msi"
     if (Test-Path $InstallerMsi) {
         Write-Info "正在自 winfsp-installer.msi 提取配套執行檔..."
         $tempExtract = Join-Path $env:TEMP "winfsp_extract_auto"
@@ -109,7 +117,7 @@ if (-not (Test-Path $MemfsBin)) {
 Copy-Item $BuiltExe (Join-Path $StagingDir "rust_ram_disk.exe") -Force
 Copy-Item (Join-Path $WinfspBinDir "memfs-x64.exe") (Join-Path $StagingDir "memfs-x64.exe") -Force
 Copy-Item (Join-Path $WinfspBinDir "winfsp-x64.dll") (Join-Path $StagingDir "winfsp-x64.dll") -Force
-Copy-Item (Join-Path $ProjectRoot "tools\winfsp-installer.msi") (Join-Path $StagingDir "winfsp-installer.msi") -Force
+Copy-Item (Join-Path $ToolsDir "winfsp-installer.msi") (Join-Path $StagingDir "winfsp-installer.msi") -Force
 Copy-Item (Join-Path $ProjectRoot "README.md") (Join-Path $StagingDir "README.md") -Force
 
 # 建立 start-ramdisk.bat
@@ -285,12 +293,13 @@ if ($LASTEXITCODE -ne 0) { throw "WiX candle 編譯失敗！" }
 
 Write-Info ">>> [2/2] 執行 WiX 連結 (light.exe)..."
 $OutputMsi = Join-Path $OutDir "RustRAMDisk-v$Version-x64.msi"
-$OutputGenericMsi = Join-Path $OutDir "RustRAMDisk.msi"
 
-& $Light -nologo -ext WixUIExtension -cultures:zh-TW -sice:ICE91 -sice:ICE60 "$WixObj" -out "$OutputMsi"
+& $Light -nologo -ext WixUIExtension -cultures:zh-TW -spdb -sice:ICE91 -sice:ICE60 "$WixObj" -out "$OutputMsi"
 if ($LASTEXITCODE -ne 0) { throw "WiX light 連結失敗！" }
 
-Copy-Item $OutputMsi $OutputGenericMsi -Force
+# 清理非必要的符號檔或暫存檔
+Get-ChildItem -Path $OutDir -Filter "*.wixpdb" | Remove-Item -Force -ErrorAction SilentlyContinue
+Get-Item (Join-Path $OutDir "RustRAMDisk.msi") -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
 # 6. 計算 SHA-256
 $Hash = (Get-FileHash -Path $OutputMsi -Algorithm SHA256).Hash.ToLower()
@@ -299,6 +308,5 @@ Write-Info "MSI SHA-256: $Hash"
 Write-Info "=========================================================="
 Write-Ok "🎉 單一 MSI 安裝套件封裝圓滿成功！"
 Write-Ok "MSI 安裝檔: $OutputMsi"
-Write-Ok "MSI 通用檔: $OutputGenericMsi"
 Write-Ok "檔案大小: $((Get-Item $OutputMsi).Length / 1MB | ForEach-Object { '{0:N2} MB' -f $_ })"
 Write-Info "=========================================================="

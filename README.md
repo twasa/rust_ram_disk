@@ -56,9 +56,9 @@
 ./scripts/build-msi.ps1
 ```
 
-### 4. 正式發布與全套件打包 (`build-release.ps1`)
+### 4. 正式發布與單一安裝套件打包 (`build-release.ps1`)
 ```powershell
-# 執行完整測試、Release 編譯、MSI 封裝，並匯出可攜版 .exe、.msi 安裝包與 SHA-256 校驗表至 release-artifacts/
+# 執行完整測試、Release 編譯、WiX MSI 封裝，並匯出系統原生單一 MSI 安裝包 (RustRAMDisk-v<version>-x64.msi) 與 SHA-256 校驗表至 release-artifacts/
 ./scripts/build-release.ps1
 ```
 

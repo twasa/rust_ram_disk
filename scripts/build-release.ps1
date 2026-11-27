@@ -1,12 +1,11 @@
-﻿<#
+<#
 .SYNOPSIS
     Rust RAM Disk 自動化發布打包腳本 (Build Release & Export Artifacts)
 
 .DESCRIPTION
-    自動執行完整測試、Cargo Release 編譯最佳化，並將產出之：
-    1. 免安裝可攜式主程式 (rust_ram_disk.exe 與具版號之二進位檔)
-    2. 配套之 WinFsp 官方離線安裝套件 (winfsp-installer.msi)
-    3. SHA-256 數位指紋校驗表 (SHA256SUMS.txt)
+    自動執行完整測試、Cargo Release 編譯最佳化，並調用 WiX 封裝 Windows 系統原生單一 MSI 安裝套件：
+    1. 具完整安裝精靈與版號之單一 MSI 安裝套件 (RustRAMDisk-v<version>-x64.msi)
+    2. SHA-256 數位指紋校驗表 (SHA256SUMS.txt)
     統一輸出至專案根目錄下的 release-artifacts/ 目錄。
 
 .PARAMETER SkipTests
@@ -61,7 +60,9 @@ Write-Info "專案路徑: $ProjectRoot"
 Write-Info "輸出目錄: $OutDir"
 Write-Info "=========================================================="
 
-if (-not (Test-Path $OutDir)) {
+if (Test-Path $OutDir) {
+    Get-ChildItem -Path $OutDir -Recurse | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue
+} else {
     New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 }
 
@@ -104,19 +105,12 @@ if (Test-Path $BuildMsiScript) {
     & $BuildMsiScript -Version $Version
 }
 
-# 4. 整理發布產物並計算 SHA-256
-Write-Info "`n>>> [4/4] 匯出交付產物與計算校驗碼至 release-artifacts/..."
+# 4. 驗證交付產物並計算 SHA-256
+Write-Info "`n>>> [4/4] 驗證交付產物與計算校驗碼至 release-artifacts/..."
 
-# 拷貝通用名稱與帶版號名稱
-$TargetExe = Join-Path $OutDir "rust_ram_disk.exe"
-$TargetVerExe = Join-Path $OutDir "rust_ram_disk-v$Version-windows-x64.exe"
-Copy-Item $BuiltExe $TargetExe -Force
-Copy-Item $BuiltExe $TargetVerExe -Force
-Write-Ok "已輸出主程式: $TargetExe"
-Write-Ok "已輸出版號檔: $TargetVerExe"
-
-# 清理舊版引導安裝包以確保 release-artifacts 僅保留單一 MSI
-Get-ChildItem $OutDir -Include "RustRAMDiskSetup*", "winfsp-installer.msi" -Recurse | Remove-Item -Force -ErrorAction SilentlyContinue
+# 確保 release-artifacts 僅保留單一 MSI 安裝套件，清理非必要產物 (如原始二進位檔或除錯符號)
+Get-ChildItem $OutDir -File | Where-Object { $_.Extension -ne ".msi" -and $_.Name -ne "SHA256SUMS.txt" } | Remove-Item -Force -ErrorAction SilentlyContinue
+Get-Item (Join-Path $OutDir "RustRAMDisk.msi") -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
 # 計算校驗碼
 Write-Info "計算 SHA-256 校驗碼清單..."

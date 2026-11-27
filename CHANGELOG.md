@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **打包流程純粹化 (`scripts/build-release.ps1`, `scripts/build-msi.ps1`)**:
+  - `build-release.ps1` 與 `build-msi.ps1` 優化為專注於 Windows 官方標準單一安裝包 (`RustRAMDisk-v<version>-x64.msi`) 封裝。
+  - 徹底移除重複的無版號別名檔 (`RustRAMDisk.msi`)、WiX 除錯符號檔 (`*.wixpdb`) 與零散原始二進位檔 (`.exe`) 匯出，確保 `release-artifacts/` 交付目錄高度純粹，僅保留單一 MSI 安裝檔與 `SHA256SUMS.txt`。
+
 ### Added
 - **單一繁體中文 MSI 完整安裝精靈與流程精簡 (`scripts/build-msi.ps1`, `scripts/build-release.ps1`)**:
   - 整合 WiX `WixUI_InstallDir` 與 `zh-TW` 繁體中文語系，提供完整微軟標準安裝精靈介面。
