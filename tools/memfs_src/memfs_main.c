@@ -86,13 +86,13 @@ NTSTATUS SvcStart(FSP_SERVICE *Service, ULONG argc, PWSTR *argv)
             argtos(DebugLogFile);
             break;
         case L'f':
-            OtherFlags = MemfsFlushAndPurgeOnCleanup;
+            OtherFlags |= MemfsFlushAndPurgeOnCleanup;
             break;
         case L'F':
             argtos(FileSystemName);
             break;
         case L'i':
-            OtherFlags = MemfsCaseInsensitive;
+            OtherFlags |= MemfsCaseInsensitive;
             break;
         case L'm':
             argtos(MountPoint);
@@ -208,7 +208,7 @@ NTSTATUS SvcStart(FSP_SERVICE *Service, ULONG argc, PWSTR *argv)
 
     MountPoint = FspFileSystemMountPoint(MemfsFileSystem(Memfs));
 
-    info(L"%s -t %ld -n %ld -s %llu -C %llu%s%s%s%s%s%s",
+    info(L"%s -t %ld -n %ld -s %I64u -C %I64u%s%s%s%s%s%s",
         L"" PROGNAME, FileInfoTimeout, MaxFileNodes, MaxFileSize, TotalCapacity,
         RootSddl ? L" -S " : L"", RootSddl ? RootSddl : L"",
         0 != VolumePrefix && L'\0' != VolumePrefix[0] ? L" -u " : L"",

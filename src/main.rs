@@ -113,6 +113,20 @@ fn main() -> anyhow::Result<()> {
     }
 
     tracing_subscriber::fmt::init();
+    let app_logger = rust_ram_disk::logger::global_logger();
+    rust_ram_disk::logger::AppLogger::install_panic_hook(app_logger.clone());
+
+    app_logger.log(
+        "INFO",
+        "main",
+        "app_started",
+        &format!("Rust RAM Disk 應用程式啟動 (PID: {})", std::process::id()),
+        Some(serde_json::json!({
+            "args": std::env::args().collect::<Vec<_>>(),
+            "log_path": app_logger.get_log_path_str(),
+        })),
+    );
+
     let cli = Cli::parse();
 
     match cli.command {
@@ -237,20 +251,48 @@ fn main() -> anyhow::Result<()> {
             // 若非管理員，直接以 UAC 提權重啟 (避免彈出多餘中繼提示對話框，使用者在 Windows 原生 UAC 點選【是】即可)
             #[cfg(target_os = "windows")]
             if !vfs::is_elevated() {
+                app_logger.log(
+                    "INFO",
+                    "vfs::uac",
+                    "relaunch_elevated",
+                    "目前非管理員身分，發起 Windows UAC 提權請求重啟程序...",
+                    None,
+                );
                 vfs::relaunch_elevated()?;
                 return Ok(());
             }
 
             // 2. 驅動環境檢核與自動註冊修復 (此時已處於管理員提權狀態，可直接完成驅動部署)
             if !vfs::is_driver_installed() {
+                app_logger.log(
+                    "WARN",
+                    "vfs::driver",
+                    "driver_missing",
+                    "未偵測到 WinFsp 核心驅動，準備執行自動部署與註冊...",
+                    None,
+                );
                 tracing::info!("系統尚未註冊 WinFsp 核心檔案系統代理驅動 (winfsp.sys)，正在執行自動註冊...");
                 if let Some(installer) = vfs::find_winfsp_installer() {
                     tracing::info!("偵測到 WinFsp 驅動安裝套件: {}", installer.display());
                     match vfs::install_winfsp_driver_silent() {
                         Ok(_) => {
+                            app_logger.log(
+                                "INFO",
+                                "vfs::driver",
+                                "driver_installed",
+                                "WinFsp 核心驅動已成功註冊完成",
+                                None,
+                            );
                             tracing::info!("WinFsp 核心驅動已成功註冊完成！");
                         }
                         Err(e) => {
+                            app_logger.log(
+                                "ERROR",
+                                "vfs::driver",
+                                "driver_install_failed",
+                                &format!("自動安裝 WinFsp 驅動失敗: {}", e),
+                                Some(serde_json::json!({ "error": e.to_string() })),
+                            );
                             tracing::error!("自動安裝驅動失敗: {}", e);
                             #[cfg(target_os = "windows")]
                             if tray {
@@ -271,6 +313,13 @@ fn main() -> anyhow::Result<()> {
                         }
                     }
                 } else {
+                    app_logger.log(
+                        "ERROR",
+                        "vfs::driver",
+                        "installer_missing",
+                        "找不到 WinFsp 核心安裝檔 (winfsp-installer.msi)",
+                        None,
+                    );
                     #[cfg(target_os = "windows")]
                     if tray {
                         use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
@@ -288,6 +337,14 @@ fn main() -> anyhow::Result<()> {
                     }
                     return Err(anyhow::anyhow!("找不到 WinFsp 驅動與安裝套件，掛載中止"));
                 }
+            } else {
+                app_logger.log(
+                    "INFO",
+                    "vfs::driver",
+                    "driver_ready",
+                    "WinFsp 核心驅動偵測就緒",
+                    None,
+                );
             }
 
             // 3. 執行實體掛載
@@ -296,9 +353,37 @@ fn main() -> anyhow::Result<()> {
             let mut current_compress = compress;
             let mut current_image = image.clone();
 
+            app_logger.log(
+                "INFO",
+                "vfs::mount",
+                "mount_start",
+                &format!("正在掛載虛擬磁碟機 {} (容量: {})", current_norm_mount, current_size),
+                Some(serde_json::json!({
+                    "mount_point": current_norm_mount,
+                    "capacity_bytes": capacity,
+                    "compress": format!("{:?}", current_compress),
+                })),
+            );
+
             let mut mount_handle = match vfs::mount_ram_disk(&current_norm_mount, capacity) {
-                Ok(h) => h,
+                Ok(h) => {
+                    app_logger.log(
+                        "INFO",
+                        "vfs::mount",
+                        "mount_success",
+                        &format!("虛擬磁碟機 {} 已成功掛載", current_norm_mount),
+                        None,
+                    );
+                    h
+                }
                 Err(e) => {
+                    app_logger.log(
+                        "ERROR",
+                        "vfs::mount",
+                        "mount_failed",
+                        &format!("掛載虛擬磁碟機 {} 失敗: {}", current_norm_mount, e),
+                        Some(serde_json::json!({ "error": e.to_string() })),
+                    );
                     tracing::error!("掛載失敗: {}", e);
                     #[cfg(target_os = "windows")]
                     if tray {
@@ -307,8 +392,9 @@ fn main() -> anyhow::Result<()> {
                         let err_msg = format!(
                             "掛載虛擬磁碟機失敗: {}\n\n\
                             目標磁碟機代號: {}\n\n\
-                            請確認該磁碟機代號未被其他硬碟、隨身碟或網路磁碟佔用，且 WinFsp 驅動正常運作。",
-                            e, current_norm_mount
+                            請確認該磁碟機代號未被其他硬碟、隨身碟或網路磁碟佔用，且 WinFsp 驅動正常運作。\n\
+                            詳細記錄已寫入：{}",
+                            e, current_norm_mount, app_logger.get_log_path_str()
                         );
                         let wide_err: Vec<u16> = err_msg.encode_utf16().chain(std::iter::once(0)).collect();
                         unsafe {
@@ -595,10 +681,12 @@ fn main() -> anyhow::Result<()> {
                             if event.id == tray_manager.exit_item.id()
                                 || event.id == tray_manager.unmount_item.id()
                             {
+                                app_logger.log("INFO", "tray::menu", "exit_requested", "收到使用者系統匣卸載與退出指令", None);
                                 println!("🛑 收到系統匣卸載與退出指令。");
                                 running = false;
                                 break;
                             } else if event.id == tray_manager.settings_item.id() {
+                                app_logger.log("INFO", "tray::menu", "settings_opened", "使用者點選開啟磁碟設定視窗", None);
                                 open_settings(
                                     host_hwnd,
                                     &current_norm_mount,
@@ -606,6 +694,9 @@ fn main() -> anyhow::Result<()> {
                                     current_compress,
                                     &current_image,
                                 );
+                            } else if event.id == tray_manager.view_logs_item.id() {
+                                app_logger.log("INFO", "tray::menu", "view_logs", "使用者點選開啟運行日誌", None);
+                                app_logger.open_in_viewer();
                             } else if event.id == tray_manager.snapshot_item.id() {
                                 let target_img = current_image
                                     .as_deref()
@@ -615,18 +706,62 @@ fn main() -> anyhow::Result<()> {
                                     target_img,
                                     current_compress.into(),
                                 ) {
-                                    Ok(count) => println!(
-                                        "💾 快照儲存完成！已打包 {} 個檔案至 {:?}",
-                                        count, target_img
-                                    ),
-                                    Err(e) => error!("儲存快照失敗: {}", e),
+                                    Ok(count) => {
+                                        app_logger.log(
+                                            "INFO",
+                                            "persistence",
+                                            "snapshot_saved",
+                                            &format!("快照儲存完成 ({} 個檔案) 至 {:?}", count, target_img),
+                                            None,
+                                        );
+                                        println!(
+                                            "💾 快照儲存完成！已打包 {} 個檔案至 {:?}",
+                                            count, target_img
+                                        );
+                                    }
+                                    Err(e) => {
+                                        app_logger.log(
+                                            "ERROR",
+                                            "persistence",
+                                            "snapshot_failed",
+                                            &format!("儲存快照失敗: {}", e),
+                                            None,
+                                        );
+                                        error!("儲存快照失敗: {}", e);
+                                    }
                                 }
                             }
                         }
 
                         // 檢查底層掛載程序是否意外中斷
                         if !mount_handle.is_alive() {
-                            eprintln!("⚠️ 偵測到掛載服務中斷，退出系統匣。");
+                            let exit_status = mount_handle.check_exit_status();
+                            let err_msg = format!(
+                                "⚠️ 偵測到 WinFsp 底層掛載服務中斷！\n結束狀態: {:?}\n\n詳細記錄請見日誌檔：\n{}",
+                                exit_status,
+                                app_logger.get_log_path_str()
+                            );
+                            app_logger.log(
+                                "ERROR",
+                                "vfs::lifecycle",
+                                "mount_process_died",
+                                &err_msg,
+                                Some(serde_json::json!({
+                                    "mount_point": current_norm_mount,
+                                    "exit_status": format!("{:?}", exit_status),
+                                    "log_path": app_logger.get_log_path_str(),
+                                })),
+                            );
+                            eprintln!("{}", err_msg);
+                            #[cfg(target_os = "windows")]
+                            {
+                                use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+                                use windows::core::w;
+                                let wide_err: Vec<u16> = err_msg.encode_utf16().chain(std::iter::once(0)).collect();
+                                unsafe {
+                                    MessageBoxW(None, windows::core::PCWSTR(wide_err.as_ptr()), w!("Rust RAM Disk 錯誤 - 掛載中斷"), MB_ICONERROR | MB_OK);
+                                }
+                            }
                             break;
                         }
 

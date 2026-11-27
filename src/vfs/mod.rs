@@ -387,6 +387,15 @@ impl VfsMountHandle {
         }
     }
 
+    /// 取得底層掛載程序退出狀態 (若已退出)
+    pub fn check_exit_status(&mut self) -> Option<std::process::ExitStatus> {
+        if let Some(ref mut child) = self.process {
+            child.try_wait().ok().flatten()
+        } else {
+            None
+        }
+    }
+
     /// 安全卸載虛擬磁碟機
     pub fn unmount(&mut self) -> Result<(), VfsError> {
         if self.unmounted {
