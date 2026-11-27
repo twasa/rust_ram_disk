@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  check-and-test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run unit tests (cargo test)
+        run: cargo test
+
+      - name: Verify release build and single MSI packaging
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/build-release.ps1 -SkipTests
+
+      - name: Verify release artifacts integrity
+        run: |
+          if (-not (Test-Path "release-artifacts/RustRAMDisk-v*.msi")) {
+            throw "MSI package not found in release-artifacts!"
+          }
+          if (-not (Test-Path "release-artifacts/SHA256SUMS.txt")) {
+            throw "SHA256SUMS.txt not found in release-artifacts!"
+          }
+          Write-Host "Generated checksums:"
+          Get-Content "release-artifacts/SHA256SUMS.txt"

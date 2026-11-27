@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release and package MSI
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/build-release.ps1
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-artifacts/*.msi
+            release-artifacts/SHA256SUMS.txt
+          draft: false
+          prerelease: false
+          generate_release_notes: true

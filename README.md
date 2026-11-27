@@ -99,3 +99,9 @@ cargo run --release -- mount -s 10G -m S: -c lz4 --tray
 # 搭配快照檔案（啟動時自動載入，結束時自動回存）
 cargo run --release -- mount -s 4G -m R: -i D:\backup\ramdisk.img --tray
 ```
+
+## 🤖 自動化 CI/CD 與 GitHub Releases
+
+專案內建完整的 GitHub Actions 自動化工作流程：
+- [`.github/workflows/ci.yml`](.github/workflows/ci.yml)：每次推送至 `main` 或開立 PR 時，自動在 `windows-latest` 執行單元測試、編譯與 MSI 打包驗證。
+- [`.github/workflows/release.yml`](.github/workflows/release.yml)：推送語意化版本標籤（例如 `git tag v0.1.0 && git push origin v0.1.0`）或於 GitHub Actions 手動觸發時，自動編譯官方正式發行版、封裝繁體中文單一 MSI 安裝套件、計算 `SHA256SUMS.txt` 並自動發布至 GitHub Releases。

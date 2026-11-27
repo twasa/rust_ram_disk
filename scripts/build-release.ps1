@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Rust RAM Disk 自動化發布打包腳本 (Build Release & Export Artifacts)
 
@@ -131,11 +131,23 @@ $StagingDir = Join-Path $env:TEMP "rust_ram_disk_msi_staging"
 if (Test-Path $StagingDir) { Remove-Item -Recurse -Force $StagingDir }
 New-Item -ItemType Directory -Force -Path $StagingDir | Out-Null
 
+# 確保 winfsp-installer.msi 存在 (打包與自癒必備，若缺失則自動下載)
+$InstallerMsi = Join-Path $ToolsDir "winfsp-installer.msi"
+if (-not (Test-Path $InstallerMsi)) {
+    Write-Info "正在自動下載 WinFsp 官方離線安裝套件至 $InstallerMsi..."
+    if (-not (Test-Path $ToolsDir)) { New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null }
+    $winfspUrl = "https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-2.0.23075.msi"
+    try {
+        Invoke-WebRequest -Uri $winfspUrl -OutFile $InstallerMsi
+    } catch {
+        curl.exe -L -o $InstallerMsi $winfspUrl
+    }
+}
+
 # 確保 winfsp_bin 存在 (若無則自 winfsp-installer.msi 自動抽取)
 $WinfspBinDir = Join-Path $ToolsDir "winfsp_bin"
 $MemfsBin = Join-Path $WinfspBinDir "memfs-x64.exe"
 if (-not (Test-Path $MemfsBin)) {
-    $InstallerMsi = Join-Path $ToolsDir "winfsp-installer.msi"
     if (Test-Path $InstallerMsi) {
         Write-Info "正在自 winfsp-installer.msi 提取配套執行檔..."
         $tempExtract = Join-Path $env:TEMP "winfsp_extract_auto"
