@@ -50,16 +50,13 @@
 ./scripts/build-local.ps1 -Destination "D:\Tools\RAMDisk" -RunBenchmark
 ```
 
-### 3. MSI 安裝套件打包 (`build-msi.ps1`)
+### 3. 正式發布與單一 MSI 安裝套件打包 (`build-release.ps1`)
 ```powershell
-# 自動透過 WiX Toolset 編譯出標準 Windows .msi 安裝套件 (包含桌面與開始功能表捷徑)
-./scripts/build-msi.ps1
-```
-
-### 4. 正式發布與單一安裝套件打包 (`build-release.ps1`)
-```powershell
-# 執行完整測試、Release 編譯、WiX MSI 封裝，並匯出系統原生單一 MSI 安裝包 (RustRAMDisk-v<version>-x64.msi) 與 SHA-256 校驗表至 release-artifacts/
+# 自動執行完整單元測試、Release 編譯最佳化與 WiX MSI 封裝，匯出系統原生單一 MSI 安裝包 (RustRAMDisk-v<version>-x64.msi) 與 SHA-256 校驗表至 release-artifacts/
 ./scripts/build-release.ps1
+
+# 若需略過單元測試快速打包
+./scripts/build-release.ps1 -SkipTests
 ```
 
 ## 🛡️ 權限與生命週期整合 (Security & Process Lifecycle)

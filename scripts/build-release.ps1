@@ -3,13 +3,13 @@
     Rust RAM Disk 自動化發布打包腳本 (Build Release & Export Artifacts)
 
 .DESCRIPTION
-    自動執行完整測試、Cargo Release 編譯最佳化，並調用 WiX 封裝 Windows 系統原生單一 MSI 安裝套件：
-    1. 具完整安裝精靈與版號之單一 MSI 安裝套件 (RustRAMDisk-v<version>-x64.msi)
+    自動執行完整測試、Cargo Release 編譯最佳化，並調用 WiX Toolset 直接封裝 Windows 系統原生單一 MSI 安裝套件：
+    1. 具備繁體中文引導精靈、自訂安裝路徑與版號之單一 MSI 安裝套件 (RustRAMDisk-v<version>-x64.msi)
     2. SHA-256 數位指紋校驗表 (SHA256SUMS.txt)
     統一輸出至專案根目錄下的 release-artifacts/ 目錄。
 
 .PARAMETER SkipTests
-    略過單元測試步驟，直接進行 Release 編譯
+    略過單元測試步驟，直接進行 Release 編譯與 MSI 封裝
 
 .PARAMETER WithWinFsp
     啟用 winfsp-mount 特性進行編譯 (需要本機已安裝 WinFsp 與可用的 bindgen/libclang)
@@ -60,6 +60,7 @@ Write-Info "專案路徑: $ProjectRoot"
 Write-Info "輸出目錄: $OutDir"
 Write-Info "=========================================================="
 
+# 清理 release-artifacts 目錄確保僅匯出本次產生的單一安裝包
 if (Test-Path $OutDir) {
     Get-ChildItem -Path $OutDir -Recurse | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue
 } else {
@@ -70,18 +71,18 @@ Set-Location $ProjectRoot
 
 # 1. 執行單元測試
 if (-not $SkipTests) {
-    Write-Info ">>> [1/3] 執行儲存引擎與快照單元測試 (cargo test -q)..."
+    Write-Info ">>> [1/4] 執行儲存引擎與快照單元測試 (cargo test -q)..."
     & cargo test -q
     if ($LASTEXITCODE -ne 0) {
         throw "單元測試未通過，打包終止！"
     }
     Write-Ok "所有單元測試完全通過！"
 } else {
-    Write-Warn ">>> [1/3] 已略過單元測試 (-SkipTests)"
+    Write-Warn ">>> [1/4] 已略過單元測試 (-SkipTests)"
 }
 
 # 2. 執行 Cargo Release 編譯
-Write-Info "`n>>> [2/3] 編譯 Release 最佳化二進位檔..."
+Write-Info "`n>>> [2/4] 編譯 Release 最佳化二進位檔..."
 $cargoArgs = @("build", "--release", "-q")
 if ($WithWinFsp) {
     $cargoArgs += @("--features", "winfsp-mount")
@@ -97,20 +98,257 @@ $BuiltExe = Join-Path $ProjectRoot "target\release\rust_ram_disk.exe"
 if (-not (Test-Path $BuiltExe)) {
     throw "未找到編譯產物: $BuiltExe"
 }
+Write-Ok "Release 二進位檔編譯成功: $BuiltExe"
 
-# 3. 呼叫 build-msi.ps1 封裝 Windows .msi 安裝套件
-Write-Info "`n>>> [3/4] 呼叫 build-msi.ps1 封裝官方 MSI 安裝套件..."
-$BuildMsiScript = Join-Path $ScriptDir "build-msi.ps1"
-if (Test-Path $BuildMsiScript) {
-    & $BuildMsiScript -Version $Version
+# 3. 封裝 Windows 官方單一 MSI 安裝套件 (整合 WiX Toolset)
+Write-Info "`n>>> [3/4] 封裝 Windows 官方單一 MSI 安裝套件 (WiX Toolset)..."
+
+# 定位工具目錄 (若在 .worktrees 中則自動指向主儲存庫共用之 tools)
+$ToolsDir = Join-Path $ProjectRoot "tools"
+if (-not (Test-Path (Join-Path $ToolsDir "winfsp-installer.msi"))) {
+    $parentRepo = Split-Path (Split-Path $ProjectRoot -Parent) -Parent
+    $parentTools = Join-Path $parentRepo "tools"
+    if (Test-Path (Join-Path $parentTools "winfsp-installer.msi")) {
+        $ToolsDir = $parentTools
+        Write-Info "已偵測並共用主儲存庫之相依工具目錄: $ToolsDir"
+    }
 }
+$WixDir = Join-Path $ToolsDir "wix"
+$Candle = Join-Path $WixDir "candle.exe"
+$Light = Join-Path $WixDir "light.exe"
+
+if ((-not (Test-Path $Candle)) -or (-not (Test-Path $Light))) {
+    Write-Info "正在自動配置 WiX Toolset 編譯工具鏈至 tools/wix..."
+    if (-not (Test-Path $WixDir)) { New-Item -ItemType Directory -Force -Path $WixDir | Out-Null }
+    $wixZip = "$env:TEMP\wix311-binaries.zip"
+    curl.exe -L -o $wixZip "https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311-binaries.zip"
+    Expand-Archive -Path $wixZip -DestinationPath $WixDir -Force
+}
+Write-Ok "WiX 編譯器就緒: $Candle"
+Write-Ok "WiX 連結器就緒: $Light"
+
+$StagingDir = Join-Path $env:TEMP "rust_ram_disk_msi_staging"
+if (Test-Path $StagingDir) { Remove-Item -Recurse -Force $StagingDir }
+New-Item -ItemType Directory -Force -Path $StagingDir | Out-Null
+
+# 確保 winfsp_bin 存在 (若無則自 winfsp-installer.msi 自動抽取)
+$WinfspBinDir = Join-Path $ToolsDir "winfsp_bin"
+$MemfsBin = Join-Path $WinfspBinDir "memfs-x64.exe"
+if (-not (Test-Path $MemfsBin)) {
+    $InstallerMsi = Join-Path $ToolsDir "winfsp-installer.msi"
+    if (Test-Path $InstallerMsi) {
+        Write-Info "正在自 winfsp-installer.msi 提取配套執行檔..."
+        $tempExtract = Join-Path $env:TEMP "winfsp_extract_auto"
+        Start-Process msiexec.exe -ArgumentList "/a", "`"$InstallerMsi`"", "/qn", "`"TARGETDIR=$tempExtract`"" -Wait
+        $srcDir = Join-Path $tempExtract "DYNAMIC\SxS\DYNAMIC\bin"
+        if (Test-Path $srcDir) {
+            if (-not (Test-Path $WinfspBinDir)) { New-Item -ItemType Directory -Force -Path $WinfspBinDir | Out-Null }
+            Copy-Item (Join-Path $srcDir "memfs-x64.exe") $WinfspBinDir -Force
+            Copy-Item (Join-Path $srcDir "winfsp-x64.dll") $WinfspBinDir -Force
+            Copy-Item (Join-Path $srcDir "winfsp-x64.sys") $WinfspBinDir -Force
+        }
+        Remove-Item -Recurse -Force $tempExtract -ErrorAction SilentlyContinue
+    }
+}
+
+# 複製打包必備檔案至臨時分區 (Staging)
+Copy-Item $BuiltExe (Join-Path $StagingDir "rust_ram_disk.exe") -Force
+Copy-Item (Join-Path $WinfspBinDir "memfs-x64.exe") (Join-Path $StagingDir "memfs-x64.exe") -Force
+Copy-Item (Join-Path $WinfspBinDir "winfsp-x64.dll") (Join-Path $StagingDir "winfsp-x64.dll") -Force
+Copy-Item (Join-Path $ToolsDir "winfsp-installer.msi") (Join-Path $StagingDir "winfsp-installer.msi") -Force
+Copy-Item (Join-Path $ProjectRoot "README.md") (Join-Path $StagingDir "README.md") -Force
+
+# 建立 start-ramdisk.bat
+$StartBat = @"
+@echo off
+cd /d "%~dp0"
+echo Starting Rust RAM Disk (2GB, Mount R:, LZ4 Compression, Systray)...
+start "" "%~dp0rust_ram_disk.exe" mount -s 2G -m R: -c lz4 --tray
+"@
+$StartBat | Out-File -FilePath (Join-Path $StagingDir "start-ramdisk.bat") -Encoding ascii -Force
+
+Write-Ok "已收集所有安裝套件組件至臨時目錄: $StagingDir"
+
+# 生成 WiX 原始碼 (RustRAMDisk.wxs)
+$WxsPath = Join-Path $StagingDir "RustRAMDisk.wxs"
+$WixXml = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" 
+           Name="Rust RAM Disk" 
+           Language="1028" 
+           Codepage="950"
+           Version="$Version.0" 
+           Manufacturer="William Wang" 
+           UpgradeCode="{E7D8A90B-4F12-4B6C-8D3E-9A5C7B1E3F5A}">
+           
+    <Package InstallerVersion="300" 
+             Compressed="yes" 
+             InstallScope="perMachine" 
+             Platform="x64" 
+             Description="High-Performance Rust RAM Disk with LZ4 Compression and Systray Integration" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <!-- 64-bit Program Files -->
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="RustRAMDisk" />
+      </Directory>
+
+      <!-- Start Menu Programs -->
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="Rust RAM Disk" />
+      </Directory>
+
+      <!-- Desktop -->
+      <Directory Id="DesktopFolder" Name="Desktop" />
+    </Directory>
+
+    <!-- Installation Components -->
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="MainExecutable" Guid="{B1A2C3D4-1111-4A5B-8C7D-0E1F2A3B4C5D}" Win64="yes">
+        <File Id="RustRamDiskExe" Source="$StagingDir\rust_ram_disk.exe" KeyPath="yes" />
+      </Component>
+
+      <Component Id="MemFsExe" Guid="{B1A2C3D4-2222-4A5B-8C7D-0E1F2A3B4C5D}" Win64="yes">
+        <File Id="MemFsExeFile" Source="$StagingDir\memfs-x64.exe" KeyPath="yes" />
+      </Component>
+
+      <Component Id="WinFspDll" Guid="{B1A2C3D4-3333-4A5B-8C7D-0E1F2A3B4C5D}" Win64="yes">
+        <File Id="WinFspDllFile" Source="$StagingDir\winfsp-x64.dll" KeyPath="yes" />
+      </Component>
+
+      <Component Id="WinFspInstaller" Guid="{B1A2C3D4-4444-4A5B-8C7D-0E1F2A3B4C5D}" Win64="yes">
+        <File Id="WinFspMsi" Source="$StagingDir\winfsp-installer.msi" KeyPath="yes" />
+      </Component>
+
+      <Component Id="StartBatch" Guid="{B1A2C3D4-5555-4A5B-8C7D-0E1F2A3B4C5D}" Win64="yes">
+        <File Id="StartBatchFile" Source="$StagingDir\start-ramdisk.bat" KeyPath="yes" />
+      </Component>
+
+      <Component Id="ReadmeFile" Guid="{B1A2C3D4-6666-4A5B-8C7D-0E1F2A3B4C5D}" Win64="yes">
+        <File Id="ReadmeDoc" Source="$StagingDir\README.md" KeyPath="yes" />
+      </Component>
+
+      <!-- WinFsp Mount Manager Kernel-mode Registration -->
+      <Component Id="MountManagerConfig" Guid="{F3E2D1C0-9999-4A5B-8C7D-0E1F2A3B4C5D}" Win64="yes">
+        <RegistryValue Root="HKLM" Key="SOFTWARE\WinFsp" Name="MountUseMountmgrFromFSD" Type="integer" Value="1" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="SOFTWARE\WOW6432Node\WinFsp" Name="MountUseMountmgrFromFSD" Type="integer" Value="1" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- Shortcuts -->
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component Id="ApplicationShortcuts" Guid="{C1D2E3F4-7777-4A5B-8C7D-0E1F2A3B4C5D}">
+        <Shortcut Id="AppStartMenuShortcut"
+                  Name="Rust RAM Disk"
+                  Description="啟動 Rust RAM Disk (預設 2GB R: 槽，啟用 LZ4 透明壓縮與系統匣)"
+                  Target="[INSTALLFOLDER]rust_ram_disk.exe"
+                  Arguments="mount -s 2G -m R: -c lz4 --tray"
+                  WorkingDirectory="INSTALLFOLDER" />
+                  
+        <Shortcut Id="InstallDriverShortcut"
+                  Name="安裝或修復 WinFsp 核心驅動"
+                  Description="安裝或更新 WinFsp 核心驅動程式 (winfsp-installer.msi)"
+                  Target="[SystemFolder]msiexec.exe"
+                  Arguments="/i &quot;[INSTALLFOLDER]winfsp-installer.msi&quot;"
+                  WorkingDirectory="INSTALLFOLDER" />
+
+        <RemoveFolder Id="CleanUpShortcuts" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\RustRAMDisk" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="DesktopFolder">
+      <Component Id="DesktopShortcutComponent" Guid="{C1D2E3F4-8888-4A5B-8C7D-0E1F2A3B4C5D}">
+        <Shortcut Id="AppDesktopShortcut"
+                  Name="Rust RAM Disk"
+                  Description="啟動 Rust RAM Disk"
+                  Target="[INSTALLFOLDER]rust_ram_disk.exe"
+                  Arguments="mount -s 2G -m R: -c lz4 --tray"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\RustRAMDisk" Name="desktop_shortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- Features -->
+    <Feature Id="MainFeature" Title="Rust RAM Disk" Level="1">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="MemFsExe" />
+      <ComponentRef Id="WinFspDll" />
+      <ComponentRef Id="WinFspInstaller" />
+      <ComponentRef Id="StartBatch" />
+      <ComponentRef Id="ReadmeFile" />
+      <ComponentRef Id="ApplicationShortcuts" />
+      <ComponentRef Id="DesktopShortcutComponent" />
+      <ComponentRef Id="MountManagerConfig" />
+    </Feature>
+
+    <!-- User Interface Configuration: WixUI_InstallDir (詢問安裝路徑與顯示安裝完成畫面) -->
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="安裝完成後立即啟動 Rust RAM Disk (掛載 R: 槽並常駐系統匣)" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+
+    <UI>
+      <UIRef Id="WixUI_InstallDir" />
+      <!-- 跳過多餘授權協議頁面，直接從歡迎頁進入安裝路徑選擇頁 (InstallDirDlg) -->
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg">NOT Installed</Publish>
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg">1</Publish>
+
+      <!-- 於安裝完成頁 (ExitDialog) 點選完成時，依勾選狀態啟動應用程式 -->
+      <Publish Dialog="ExitDialog"
+               Control="Finish" 
+               Event="DoAction" 
+               Value="LaunchApp" 
+               Order="1">WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed</Publish>
+    </UI>
+
+    <!-- Post-installation Launch Action -->
+    <CustomAction Id="LaunchApp" 
+                  Directory="INSTALLFOLDER" 
+                  ExeCommand="&quot;[INSTALLFOLDER]rust_ram_disk.exe&quot; mount -s 2G -m R: -c lz4 --tray" 
+                  Execute="immediate" 
+                  Return="asyncNoWait" />
+
+    <!-- 針對命令列靜默安裝 (UILevel < 5) 自動執行啟動 -->
+    <InstallExecuteSequence>
+      <Custom Action="LaunchApp" After="InstallFinalize">NOT Installed AND UILevel &lt; 5</Custom>
+    </InstallExecuteSequence>
+  </Product>
+</Wix>
+"@
+
+$WixXml | Out-File -FilePath $WxsPath -Encoding utf8 -Force
+Write-Ok "已產生 WiX 設定規格書: $WxsPath"
+
+# 編譯與連結 MSI (啟用 WixUIExtension, zh-TW 繁體中文與 -spdb 抑制符號檔)
+Write-Info ">>> 執行 WiX 編譯 (candle.exe)..."
+$WixObj = Join-Path $StagingDir "RustRAMDisk.wixobj"
+& $Candle -arch x64 -nologo -ext WixUIExtension "$WxsPath" -out "$WixObj"
+if ($LASTEXITCODE -ne 0) { throw "WiX candle 編譯失敗！" }
+
+Write-Info ">>> 執行 WiX 連結 (light.exe)..."
+$OutputMsi = Join-Path $OutDir "RustRAMDisk-v$Version-x64.msi"
+
+& $Light -nologo -ext WixUIExtension -cultures:zh-TW -spdb -sice:ICE91 -sice:ICE60 "$WixObj" -out "$OutputMsi"
+if ($LASTEXITCODE -ne 0) { throw "WiX light 連結失敗！" }
+
+# 清理非必要產物 (除錯符號與臨時檔)
+Get-ChildItem -Path $OutDir -Filter "*.wixpdb" | Remove-Item -Force -ErrorAction SilentlyContinue
+Get-Item (Join-Path $OutDir "RustRAMDisk.msi") -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force $StagingDir -ErrorAction SilentlyContinue
+
+Write-Ok "🎉 單一 MSI 安裝套件封裝圓滿成功！"
+Write-Ok "MSI 安裝檔: $OutputMsi"
+Write-Ok "檔案大小: $((Get-Item $OutputMsi).Length / 1MB | ForEach-Object { '{0:N2} MB' -f $_ })"
 
 # 4. 驗證交付產物並計算 SHA-256
 Write-Info "`n>>> [4/4] 驗證交付產物與計算校驗碼至 release-artifacts/..."
 
-# 確保 release-artifacts 僅保留單一 MSI 安裝套件，清理非必要產物 (如原始二進位檔或除錯符號)
+# 確保 release-artifacts 僅保留單一 MSI 安裝套件
 Get-ChildItem $OutDir -File | Where-Object { $_.Extension -ne ".msi" -and $_.Name -ne "SHA256SUMS.txt" } | Remove-Item -Force -ErrorAction SilentlyContinue
-Get-Item (Join-Path $OutDir "RustRAMDisk.msi") -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
 # 計算校驗碼
 Write-Info "計算 SHA-256 校驗碼清單..."
