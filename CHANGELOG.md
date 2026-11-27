@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-28
+
+### Fixed
+- **Windows 檔案總管容量精確顯示 (Exact Explorer Capacity Reporting)**:
+  - 修正 Windows 檔案總管顯示虛擬磁碟容量錯誤之問題（由先前乘算節點產生的 2.00 PB / 2.00 TB 徹底修正為精確設定之 2.00 GB）。
+  - 重構 WinFsp 記憶體檔案系統 (MemFS) 原生模組，新增 `-C` 總容量參數並支援即時動態精確統計可用空間與已用空間。
+  - 放寬單檔最大容量上限至虛擬磁碟配置上限，單一檔案可直接達到磁碟全額容量。
+  - 預設檔案節點上限擴充至 1,048,576 個，杜絕解壓縮大量零碎檔案時回報 `STATUS_CANNOT_MAKE` 之問題。
+  - 優化 `find_memfs_binary` 優先級，確保優先採用本專案客製優化編譯之 MemFS 原生模組。
+- **原始碼開放與編譯腳本 (`tools/memfs_src/build.ps1`)**:
+  - 將優化後之 MemFS C/C++ 原始碼與 WinFsp 標頭完整納入儲存庫管理，並提供自動化 MSVC 編譯腳本，確保任何開發環境皆可重現建置。
+
 ## [0.1.0] - 2026-11-28
 
 ### Added

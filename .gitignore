@@ -7,6 +7,8 @@ release-artifacts/
 tools/*.msi
 tools/wix/
 tools/llvm/
+tools/memfs_src/*.exe
+tools/memfs_src/*.obj
 .vscode/
 .idea/
 .worktrees/
