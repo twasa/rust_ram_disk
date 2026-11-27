@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-28
+
+### Fixed
+- **精準核心驅動檢測 (Accurate Kernel Driver Detection)**:
+  - 修正 `is_driver_installed()` 檢測邏輯，僅檢驗核心服務 (`Services\winfsp`) 與驅動檔 (`winfsp-x64.sys`)，徹底排除本專案 MSI 預寫 `HKLM\SOFTWARE\WinFsp\MountUseMountmgrFromFSD` 所造成的「尚未安裝驅動卻誤判為已安裝」之重大漏洞。
+- **精簡提權流程與消除重複對話框 (Streamlined Single UAC Prompt)**:
+  - 移除多餘的中繼確認對話框（消除先跳確認視窗再跳 Windows UAC 的繁瑣體驗），桌面捷徑啟動時直接由 Windows 原生 UAC 授權（單一畫面一次點選【是】即可）。
+  - 將核心驅動檢測延後至提權完成後執行，由提權程序直接於背景靜默完成 `winfsp-installer.msi` 註冊，徹底告別「連續兩次對話視窗點【是】」的不良體驗。
+  - 在 `relaunch_elevated()` 中顯式指定 `lpDirectory` 指向程式安裝目錄，防止 Windows 預設提權切換至 `System32` 導致相對路徑與相依工具失聯。
+- **圖形化掛載失敗診斷提示 (GUI Error Alert on Mount Failure)**:
+  - 在 `--tray` 系統匣模式下，若掛載遭遇磁碟機代號衝突、被佔用或核心驅動未載入，即時彈出 Win32 錯誤對話框提示具體錯誤原因與建議處置，不再因無終端機視窗而靜默退出。
+
 ## [0.1.1] - 2026-11-28
 
 ### Fixed

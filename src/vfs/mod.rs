@@ -38,43 +38,28 @@ pub enum VfsError {
 
 /// 檢查系統是否已安裝並註冊 WinFsp 核心驅動 (winfsp.sys)
 pub fn is_driver_installed() -> bool {
-    // 1. 檢查 Windows 登錄檔中是否存在 WinFsp 安裝註冊
-    let reg_installed = {
+    // 1. 檢查 Windows 核心驅動服務登錄檔 (winfsp 核心驅動服務註冊)
+    let service_installed = {
         let hklm = windows::Win32::System::Registry::HKEY_LOCAL_MACHINE;
         unsafe {
             use windows::core::w;
             use windows::Win32::System::Registry::{RegOpenKeyExW, HKEY, KEY_READ};
             let mut sub_key = HKEY::default();
-            let res1 = RegOpenKeyExW(
-                hklm,
-                w!("SOFTWARE\\WinFsp"),
-                0,
-                KEY_READ,
-                &mut sub_key,
-            );
-            let res2 = RegOpenKeyExW(
-                hklm,
-                w!("SOFTWARE\\WOW6432Node\\WinFsp"),
-                0,
-                KEY_READ,
-                &mut sub_key,
-            );
-            let res3 = RegOpenKeyExW(
+            RegOpenKeyExW(
                 hklm,
                 w!("SYSTEM\\CurrentControlSet\\Services\\winfsp"),
                 0,
                 KEY_READ,
                 &mut sub_key,
-            );
-            res1.is_ok() || res2.is_ok() || res3.is_ok()
+            ).is_ok()
         }
     };
 
-    if reg_installed {
+    if service_installed {
         return true;
     }
 
-    // 2. 備用檢查：檢查標準安裝路徑下的 winfsp.sys
+    // 2. 備用檢查：檢查標準安裝路徑下的 winfsp-x64.sys 核心驅動檔案
     let sys_path = Path::new("C:\\Windows\\System32\\drivers\\winfsp-x64.sys");
     if sys_path.exists() {
         return true;
@@ -145,6 +130,13 @@ pub fn relaunch_elevated() -> Result<(), VfsError> {
     let wide_args: Vec<u16> = args_str.encode_utf16().chain(std::iter::once(0)).collect();
     let wide_verb: Vec<u16> = "runas\0".encode_utf16().collect();
 
+    let exe_dir = exe.parent().map(|p| {
+        p.to_string_lossy()
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<u16>>()
+    });
+
     let mut sei = SHELLEXECUTEINFOW {
         cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
         fMask: SEE_MASK_NOCLOSEPROCESS,
@@ -152,7 +144,7 @@ pub fn relaunch_elevated() -> Result<(), VfsError> {
         lpVerb: PCWSTR(wide_verb.as_ptr()),
         lpFile: PCWSTR(wide_exe.as_ptr()),
         lpParameters: PCWSTR(wide_args.as_ptr()),
-        lpDirectory: PCWSTR::null(),
+        lpDirectory: exe_dir.as_ref().map_or(PCWSTR::null(), |d| PCWSTR(d.as_ptr())),
         nShow: SW_SHOWDEFAULT.0 as i32,
         ..Default::default()
     };
