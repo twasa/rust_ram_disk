@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Rust RAM Disk Windows MSI 安裝套件打包腳本 (Build MSI Installer via WiX Toolset)
 
@@ -188,9 +188,10 @@ $WixXml = @"
     <DirectoryRef Id="ApplicationProgramsFolder">
       <Component Id="ApplicationShortcuts" Guid="{C1D2E3F4-7777-4A5B-8C7D-0E1F2A3B4C5D}">
         <Shortcut Id="AppStartMenuShortcut"
-                  Name="Rust RAM Disk (啟動常駐)"
+                  Name="Rust RAM Disk"
                   Description="啟動 Rust RAM Disk (預設 2GB R: 槽，啟用 LZ4 透明壓縮與系統匣)"
-                  Target="[INSTALLFOLDER]start-ramdisk.bat"
+                  Target="[INSTALLFOLDER]rust_ram_disk.exe"
+                  Arguments="mount -s 2G -m R: -c lz4 --tray"
                   WorkingDirectory="INSTALLFOLDER" />
                   
         <Shortcut Id="InstallDriverShortcut"
@@ -210,7 +211,8 @@ $WixXml = @"
         <Shortcut Id="AppDesktopShortcut"
                   Name="Rust RAM Disk"
                   Description="啟動 Rust RAM Disk"
-                  Target="[INSTALLFOLDER]start-ramdisk.bat"
+                  Target="[INSTALLFOLDER]rust_ram_disk.exe"
+                  Arguments="mount -s 2G -m R: -c lz4 --tray"
                   WorkingDirectory="INSTALLFOLDER" />
         <RegistryValue Root="HKCU" Key="Software\RustRAMDisk" Name="desktop_shortcut" Type="integer" Value="1" KeyPath="yes" />
       </Component>

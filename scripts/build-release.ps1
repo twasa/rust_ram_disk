@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Rust RAM Disk 自動化發布打包腳本 (Build Release & Export Artifacts)
 

@@ -53,6 +53,14 @@
 ./scripts/build-release.ps1
 ```
 
+## 🛡️ 權限與生命週期整合 (Security & Process Lifecycle)
+- **免安裝軟體執行支援**：WinFsp 根安全描述元（Root SDDL）注入 `O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;WD)`，具備物件繼承（`OI`）與容器繼承（`CI`），賦予 System、Administrators 與所有使用者完全控制權（`FA`），全面支援 portable `.exe` 執行與檔案讀取。
+- **無縫預覽相容性**：檔案節點上限自預設 1024 擴充至 1,048,576，並啟用快取立即 flush/purge 機制（`-f`），檔案管理器（如 `rust_file_manager`）與 WebView2 即時預覽文字、圖片與程式碼零衝突。
+- **系統匣單實例與智慧重載（Single-Instance & Reload）**：
+  - 重複執行桌面或開始功能表捷徑時，不會跳出錯誤或重複掛載，而是自動向背景常駐實例發送重載通知，即時重新整理並顯示系統匣圖示。
+  - 監聽 Windows `TaskbarCreated` 廣播，當 `explorer.exe` 重啟或工作列重建時，圖示自動復原不遺失。
+  - 捷徑直接調用主程式並啟用無主控台視窗模式（GUI Subsystem），徹底消除黑底 `cmd.exe` 視窗。
+
 ## 🚀 CLI 指令與手動操作
 
 ### 執行效能基準測試

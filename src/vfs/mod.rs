@@ -221,15 +221,27 @@ pub fn mount_ram_disk(mount_point_raw: &str, capacity_bytes: u64) -> Result<VfsM
     let memfs_bin = find_memfs_binary()?;
     info!("Using WinFsp MemFS binary: {:?}", memfs_bin);
 
-    // 啟動 memfs: -i (忽略大小寫), -F NTFS (檔案系統格式), -m <MountPoint>, -s <Bytes>
+    // 啟動 memfs:
+    // -i: 忽略檔名大小寫 (Windows 應用程式相容必要)
+    // -F NTFS: 模擬為 NTFS 檔案系統格式 (Windows 執行檔、提權執行與總管辨識必備)
+    // -n 1048576: 節點上限擴充至 1,048,576 (避免複製大量檔案的免安裝軟體時超過預設 1024 上限)
+    // -s <capacity_bytes>: 支援的單檔最大容量
+    // -f: 關閉檔案控制代碼時立即 flush and purge 快取，確保跨程序讀取與預覽即時一致
+    // -S: 指定 Root SDDL，包含 OICI 繼承與 FA 完全控制權，確保免安裝軟體可執行、檔案預覽與所有使用者讀寫權限
+    let sddl = "O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;WD)";
     let mut cmd = Command::new(&memfs_bin);
     cmd.arg("-i")
         .arg("-F")
         .arg("NTFS")
-        .arg("-m")
-        .arg(&mount_point)
+        .arg("-n")
+        .arg("1048576")
         .arg("-s")
-        .arg(capacity_bytes.to_string());
+        .arg(capacity_bytes.to_string())
+        .arg("-f")
+        .arg("-S")
+        .arg(sddl)
+        .arg("-m")
+        .arg(&mount_point);
 
     #[cfg(target_os = "windows")]
     {

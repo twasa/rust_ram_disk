@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -95,6 +97,12 @@ fn parse_size(input: &str) -> Result<u64, String> {
 }
 
 fn main() -> anyhow::Result<()> {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+        let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+
     tracing_subscriber::fmt::init();
     let cli = Cli::parse();
 
@@ -194,6 +202,28 @@ fn main() -> anyhow::Result<()> {
             println!("   記憶體壓縮模式 : {:?}", compress);
             println!("============================================================");
 
+            // 0. 單實例檢測 (Single-Instance Check) 與系統匣重載信號
+            #[cfg(target_os = "windows")]
+            {
+                use windows::core::PCWSTR;
+                use windows::Win32::Foundation::{LPARAM, WPARAM};
+                use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, WM_APP};
+
+                const WM_APP_RELOAD_TRAY: u32 = WM_APP + 101;
+                let host_title = format!("RustRAMDisk_Host_{}\0", norm_mount.trim_end_matches(':'));
+                let wide_title: Vec<u16> = host_title.encode_utf16().collect();
+                if let Ok(existing_hwnd) = unsafe { FindWindowW(None, PCWSTR(wide_title.as_ptr())) } {
+                    if !existing_hwnd.0.is_null() {
+                        unsafe {
+                            let _ = PostMessageW(existing_hwnd, WM_APP_RELOAD_TRAY, WPARAM(0), LPARAM(0));
+                        }
+                        println!("🔔 虛擬磁碟機 {} 已在背景執行中！", norm_mount);
+                        println!("   已向執行中實例發送重載信號，重新載入並顯示右下角系統匣圖示。");
+                        return Ok(());
+                    }
+                }
+            }
+
             // 1. 驅動環境檢核
             if !vfs::is_driver_installed() {
                 eprintln!("\n❌ 錯誤：未偵測到已安裝之 WinFsp 核心檔案系統代理驅動！");
@@ -235,58 +265,133 @@ fn main() -> anyhow::Result<()> {
                 #[cfg(target_os = "windows")]
                 {
                     use rust_ram_disk::tray::TrayManager;
-                    let tray_manager =
+                    use windows::core::{w, PCWSTR};
+                    use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+                        MsgWaitForMultipleObjects, PeekMessageW, RegisterClassExW, RegisterWindowMessageW,
+                        TranslateMessage, MSG, PM_REMOVE, QS_ALLINPUT, WNDCLASSEXW, WM_APP,
+                        WINDOW_EX_STYLE, WINDOW_STYLE,
+                    };
+
+                    const WM_APP_RELOAD_TRAY: u32 = WM_APP + 101;
+
+                    unsafe extern "system" fn host_wndproc(
+                        hwnd: HWND,
+                        msg: u32,
+                        wparam: WPARAM,
+                        lparam: LPARAM,
+                    ) -> LRESULT {
+                        DefWindowProcW(hwnd, msg, wparam, lparam)
+                    }
+
+                    // 註冊隱藏 Host 視窗類別，以接收工作列與二次執行訊息
+                    let class_name = w!("RustRAMDisk_HostClass");
+                    let wc = WNDCLASSEXW {
+                        cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                        lpfnWndProc: Some(host_wndproc),
+                        hInstance: HINSTANCE(std::ptr::null_mut()),
+                        lpszClassName: class_name,
+                        ..Default::default()
+                    };
+                    unsafe {
+                        let _ = RegisterClassExW(&wc);
+                    }
+
+                    let host_title = format!("RustRAMDisk_Host_{}\0", norm_mount.trim_end_matches(':'));
+                    let wide_title: Vec<u16> = host_title.encode_utf16().collect();
+                    let host_hwnd = unsafe {
+                        CreateWindowExW(
+                            WINDOW_EX_STYLE::default(),
+                            class_name,
+                            PCWSTR(wide_title.as_ptr()),
+                            WINDOW_STYLE::default(),
+                            0,
+                            0,
+                            0,
+                            0,
+                            HWND(std::ptr::null_mut()),
+                            None,
+                            HINSTANCE(std::ptr::null_mut()),
+                            None,
+                        )
+                        .ok()
+                    };
+
+                    let taskbar_created_msg = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
+
+                    let mut tray_manager =
                         TrayManager::new("Rust RAM Disk", &norm_mount, &size)?;
-                    let menu_channel = muda::MenuEvent::receiver();
+                    let mut menu_channel = muda::MenuEvent::receiver();
                     println!("\n📌 系統匣圖示 (Systray) 已在右下角常駐。");
                     println!("   右鍵點擊系統匣圖示可隨時儲存快照、卸載磁碟或退出程式。");
 
-                    unsafe {
-                        use windows::Win32::UI::WindowsAndMessaging::{
-                            DispatchMessageW, MsgWaitForMultipleObjects, PeekMessageW,
-                            TranslateMessage, MSG, PM_REMOVE, QS_ALLINPUT,
-                        };
-
-                        let mut running = true;
-                        while running {
-                            let mut msg = MSG::default();
-                            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-                                let _ = TranslateMessage(&msg);
-                                DispatchMessageW(&msg);
-                            }
-
-                            while let Ok(event) = menu_channel.try_recv() {
-                                if event.id == tray_manager.exit_item.id()
-                                    || event.id == tray_manager.unmount_item.id()
-                                {
-                                    println!("🛑 收到系統匣卸載與退出指令。");
-                                    running = false;
-                                    break;
-                                } else if event.id == tray_manager.snapshot_item.id() {
-                                    let target_img = image
-                                        .as_deref()
-                                        .unwrap_or_else(|| Path::new("ramdisk_snapshot.img"));
-                                    match ImagePersistence::save_drive_snapshot(
-                                        &norm_mount,
-                                        target_img,
-                                        compress.into(),
-                                    ) {
-                                        Ok(count) => println!(
-                                            "💾 快照儲存完成！已打包 {} 個檔案至 {:?}",
-                                            count, target_img
-                                        ),
-                                        Err(e) => error!("儲存快照失敗: {}", e),
+                    let mut running = true;
+                    while running {
+                        let mut msg = MSG::default();
+                        while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
+                            // 檢查是否收到「再次執行重載」或「Explorer 重新啟動 (TaskbarCreated)」通知
+                            if msg.message == WM_APP_RELOAD_TRAY
+                                || (taskbar_created_msg != 0 && msg.message == taskbar_created_msg)
+                            {
+                                tracing::info!("收到系統匣重載或工作列重建通知，正在重新整理圖示...");
+                                match TrayManager::new("Rust RAM Disk", &norm_mount, &size) {
+                                    Ok(new_tm) => {
+                                        tray_manager = new_tm;
+                                        menu_channel = muda::MenuEvent::receiver();
+                                        tracing::info!("系統匣圖示已成功刷新重建。");
+                                    }
+                                    Err(e) => {
+                                        error!("重新整理系統匣圖示失敗: {}", e);
                                     }
                                 }
                             }
 
-                            // 檢查底層掛載程序是否意外中斷
-                            if !mount_handle.is_alive() {
-                                eprintln!("⚠️ 偵測到掛載服務中斷，退出系統匣。");
-                                break;
+                            unsafe {
+                                let _ = TranslateMessage(&msg);
+                                DispatchMessageW(&msg);
                             }
+                        }
 
+                        while let Ok(event) = menu_channel.try_recv() {
+                            if event.id == tray_manager.exit_item.id()
+                                || event.id == tray_manager.unmount_item.id()
+                            {
+                                println!("🛑 收到系統匣卸載與退出指令。");
+                                running = false;
+                                break;
+                            } else if event.id == tray_manager.snapshot_item.id() {
+                                let target_img = image
+                                    .as_deref()
+                                    .unwrap_or_else(|| Path::new("ramdisk_snapshot.img"));
+                                match ImagePersistence::save_drive_snapshot(
+                                    &norm_mount,
+                                    target_img,
+                                    compress.into(),
+                                ) {
+                                    Ok(count) => println!(
+                                        "💾 快照儲存完成！已打包 {} 個檔案至 {:?}",
+                                        count, target_img
+                                    ),
+                                    Err(e) => error!("儲存快照失敗: {}", e),
+                                }
+                            }
+                        }
+
+                        // 檢查底層掛載程序是否意外中斷
+                        if !mount_handle.is_alive() {
+                            eprintln!("⚠️ 偵測到掛載服務中斷，退出系統匣。");
+                            break;
+                        }
+
+                        unsafe {
                             let _ = MsgWaitForMultipleObjects(None, false, 100, QS_ALLINPUT);
+                        }
+                    }
+
+                    if let Some(hwnd) = host_hwnd {
+                        unsafe {
+                            let _ = DestroyWindow(hwnd);
                         }
                     }
                 }

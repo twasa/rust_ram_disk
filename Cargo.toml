@@ -16,7 +16,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tray-icon = "0.27"
 muda = "0.22"
-windows = { version = "0.58", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_Registry"] }
+windows = { version = "0.58", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_Registry", "Win32_System_Console", "Win32_Graphics_Gdi"] }
 
 # WinFsp support (optional feature, so core engine can be built and tested independently)
 winfsp = { version = "0.13", optional = true }
