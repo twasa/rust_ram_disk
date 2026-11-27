@@ -68,10 +68,14 @@
   - **免安裝軟體相容支援**：消除 Windows 1005 (`ERROR_UNRECOGNIZED_VOLUME`) 錯誤，Windows PE Loader 與 AppCompat 能正確解析磁碟區代號，所有免安裝可攜式程式（Portable `.exe`）皆可直接雙擊順暢執行。
   - **自動 UAC 權限導引**：若未以系統管理員身分啟動，程式會主動跳出友善說明視窗並透過標準 Windows UAC 機制完成提權重啟。
   - **MSI 安裝環境優化**：MSI 安裝套件自動於 `HKLM\SOFTWARE\WinFsp` 註冊 `MountUseMountmgrFromFSD` 旗標，確保核心驅動與全域掛載管理器無縫協同。
-- **全新乾淨環境隨裝即用 (Out-of-the-Box on Clean Windows)**：
-  - **雙重安裝管道**：同步提供 **WiX Burn 整合引導檔 (`RustRAMDiskSetup.exe`)** 與 **標準微軟 MSI 安裝包 (`RustRAMDisk.msi`)**。
-  - **安裝完成即時掛載**：MSI 與引導程式於安裝完成後立即自動調用掛載程序，`R:` 磁碟機代號與系統匣即刻就緒，無需使用者手動尋找捷徑啟動。
-  - **智慧驅動自癒與 UAC 引導 (Smart Driver Self-Healing)**：若在未安裝 WinFsp 的乾淨機器上啟動主程式或捷徑，程式會主動跳出友善說明視窗並透過標準 Windows UAC 機制完成核心驅動註冊，隨後無縫完成掛載。
+- **單一繁體中文 MSI 完整安裝精靈 (Standard Windows MSI with Full Wizard UI)**：
+  - **純單一 MSI 發布**：精簡打包流程，統一發布獨立、高內聚的微軟標準 `RustRAMDisk-v0.1.0-x64.msi`。
+  - **完整安裝引導與自訂目錄**：
+    1. **歡迎精靈畫面**：繁體中文歡迎步驟引導。
+    2. **自訂安裝目的地**：明確詢問使用者軟體要安裝到哪裡，支援「變更/瀏覽」按鈕自選安裝磁碟與路徑（預設 `C:\Program Files\RustRAMDisk`）。
+    3. **準備安裝與進度顯示**：顯示檔案解壓與系統元件配置進度條。
+    4. **安裝完成確認畫面**：清楚呈現安裝成功通知，提供「安裝完成後立即啟動 Rust RAM Disk」勾選方塊，點擊「完成」時才啟動服務與常駐系統匣。
+  - **內嵌核心驅動離線自癒**：MSI 內部直接打包 `winfsp-installer.msi`，乾淨環境隨裝即用，無需手動補載依賴。
 - **免安裝軟體執行支援**：WinFsp 根安全描述元（Root SDDL）注入 `O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;WD)`，具備物件繼承（`OI`）與容器繼承（`CI`），賦予 System、Administrators 與所有使用者完全控制權（`FA`），全面支援 portable `.exe` 執行與檔案讀取。
 - **無縫預覽相容性**：檔案節點上限自預設 1024 擴充至 1,048,576，並啟用快取立即 flush/purge 機制（`-f`），檔案管理器（如 `rust_file_manager`）與 WebView2 即時預覽文字、圖片與程式碼零衝突。
 - **系統匣單實例與智慧重載（Single-Instance & Reload）**：

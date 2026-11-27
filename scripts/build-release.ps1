@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Rust RAM Disk 自動化發布打包腳本 (Build Release & Export Artifacts)
 
@@ -115,13 +115,8 @@ Copy-Item $BuiltExe $TargetVerExe -Force
 Write-Ok "已輸出主程式: $TargetExe"
 Write-Ok "已輸出版號檔: $TargetVerExe"
 
-# 拷貝配套之 WinFsp 安裝包
-$InstallerMsi = Join-Path $ProjectRoot "tools\winfsp-installer.msi"
-if (Test-Path $InstallerMsi) {
-    $TargetMsi = Join-Path $OutDir "winfsp-installer.msi"
-    Copy-Item $InstallerMsi $TargetMsi -Force
-    Write-Ok "已包含配套驅動安裝包: $TargetMsi"
-}
+# 清理舊版引導安裝包以確保 release-artifacts 僅保留單一 MSI
+Get-ChildItem $OutDir -Include "RustRAMDiskSetup*", "winfsp-installer.msi" -Recurse | Remove-Item -Force -ErrorAction SilentlyContinue
 
 # 計算校驗碼
 Write-Info "計算 SHA-256 校驗碼清單..."

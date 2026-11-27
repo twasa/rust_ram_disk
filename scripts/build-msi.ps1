@@ -130,8 +130,8 @@ $WixXml = @"
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*" 
            Name="Rust RAM Disk" 
-           Language="1033" 
-           Codepage="65001"
+           Language="1028" 
+           Codepage="950"
            Version="$Version.0" 
            Manufacturer="William Wang" 
            UpgradeCode="{E7D8A90B-4F12-4B6C-8D3E-9A5C7B1E3F5A}">
@@ -240,15 +240,35 @@ $WixXml = @"
       <ComponentRef Id="MountManagerConfig" />
     </Feature>
 
-    <!-- Post-installation Launch Action: Auto-mount R: drive upon install -->
+    <!-- User Interface Configuration: WixUI_InstallDir (詢問安裝路徑與顯示安裝完成畫面) -->
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="安裝完成後立即啟動 Rust RAM Disk (掛載 R: 槽並常駐系統匣)" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+
+    <UI>
+      <UIRef Id="WixUI_InstallDir" />
+      <!-- 跳過多餘授權協議頁面，直接從歡迎頁進入安裝路徑選擇頁 (InstallDirDlg) -->
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg">NOT Installed</Publish>
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg">1</Publish>
+
+      <!-- 於安裝完成頁 (ExitDialog) 點選完成時，依勾選狀態啟動應用程式 -->
+      <Publish Dialog="ExitDialog"
+               Control="Finish" 
+               Event="DoAction" 
+               Value="LaunchApp" 
+               Order="1">WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed</Publish>
+    </UI>
+
+    <!-- Post-installation Launch Action -->
     <CustomAction Id="LaunchApp" 
                   Directory="INSTALLFOLDER" 
                   ExeCommand="&quot;[INSTALLFOLDER]rust_ram_disk.exe&quot; mount -s 2G -m R: -c lz4 --tray" 
                   Execute="immediate" 
                   Return="asyncNoWait" />
 
+    <!-- 針對命令列靜默安裝 (UILevel < 5) 自動執行啟動 -->
     <InstallExecuteSequence>
-      <Custom Action="LaunchApp" After="InstallFinalize">NOT Installed</Custom>
+      <Custom Action="LaunchApp" After="InstallFinalize">NOT Installed AND UILevel &lt; 5</Custom>
     </InstallExecuteSequence>
   </Product>
 </Wix>
@@ -257,85 +277,28 @@ $WixXml = @"
 $WixXml | Out-File -FilePath $WxsPath -Encoding utf8 -Force
 Write-Ok "已產生 WiX 設定規格書: $WxsPath"
 
-# 5. 編譯與連結 MSI
+# 5. 編譯與連結 MSI (啟用 WixUIExtension)
 Write-Info ">>> [1/2] 執行 WiX 編譯 (candle.exe)..."
 $WixObj = Join-Path $StagingDir "RustRAMDisk.wixobj"
-& $Candle -arch x64 -nologo "$WxsPath" -out "$WixObj"
+& $Candle -arch x64 -nologo -ext WixUIExtension "$WxsPath" -out "$WixObj"
 if ($LASTEXITCODE -ne 0) { throw "WiX candle 編譯失敗！" }
 
 Write-Info ">>> [2/2] 執行 WiX 連結 (light.exe)..."
 $OutputMsi = Join-Path $OutDir "RustRAMDisk-v$Version-x64.msi"
 $OutputGenericMsi = Join-Path $OutDir "RustRAMDisk.msi"
 
-& $Light -nologo "$WixObj" -out "$OutputMsi"
+& $Light -nologo -ext WixUIExtension -cultures:zh-TW -sice:ICE91 -sice:ICE60 "$WixObj" -out "$OutputMsi"
 if ($LASTEXITCODE -ne 0) { throw "WiX light 連結失敗！" }
 
 Copy-Item $OutputMsi $OutputGenericMsi -Force
 
-# 6. 建置一鍵式引導安裝套件 (WiX Burn Bootstrapper: RustRAMDiskSetup.exe)
-Write-Info ">>> [3/3] 建置整合式引導安裝檔 (WiX Burn Bootstrapper)..."
-$BundleWxsPath = Join-Path $StagingDir "Bundle.wxs"
-$BundleObj = Join-Path $StagingDir "Bundle.wixobj"
-$OutputSetupExe = Join-Path $OutDir "RustRAMDiskSetup-v$Version.exe"
-$OutputGenericSetupExe = Join-Path $OutDir "RustRAMDiskSetup.exe"
-
-$BundleXml = @"
-<?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
-     xmlns:bal="http://schemas.microsoft.com/wix/BalExtension">
-  <Bundle Name="Rust RAM Disk" 
-          Version="$Version.0" 
-          Manufacturer="William Wang" 
-          UpgradeCode="{A1B2C3D4-5E6F-7A8B-9C0D-1E2F3A4B5C6D}">
-    <BootstrapperApplicationRef Id="WixStandardBootstrapperApplication.HyperlinkLicense">
-      <bal:WixStandardBootstrapperApplication LicenseUrl="" SuppressOptionsUI="yes" />
-    </BootstrapperApplicationRef>
-
-    <Chain>
-      <MsiPackage SourceFile="$StagingDir\winfsp-installer.msi" 
-                  DisplayName="WinFsp 檔案系統核心驅動" 
-                  Compressed="yes" 
-                  Vital="yes"
-                  Permanent="yes" />
-      <MsiPackage SourceFile="$OutputMsi" 
-                  DisplayName="Rust RAM Disk 主程式" 
-                  Compressed="yes" 
-                  Vital="yes" />
-    </Chain>
-  </Bundle>
-</Wix>
-"@
-
-$BundleXml | Out-File -FilePath $BundleWxsPath -Encoding utf8 -Force
-
-try {
-    & $Candle -arch x64 -nologo -ext WixBalExtension "$BundleWxsPath" -out "$BundleObj"
-    if ($LASTEXITCODE -eq 0) {
-        & $Light -nologo -ext WixBalExtension "$BundleObj" -out "$OutputSetupExe"
-        if ($LASTEXITCODE -eq 0) {
-            Copy-Item $OutputSetupExe $OutputGenericSetupExe -Force
-            Write-Ok "引導安裝檔建置成功: $OutputSetupExe"
-        }
-    }
-} catch {
-    Write-Warn "WiX Burn 建置略過: $($_.Exception.Message)"
-}
-
-# 7. 計算 SHA-256
+# 6. 計算 SHA-256
 $Hash = (Get-FileHash -Path $OutputMsi -Algorithm SHA256).Hash.ToLower()
 Write-Info "MSI SHA-256: $Hash"
-if (Test-Path $OutputSetupExe) {
-    $ExeHash = (Get-FileHash -Path $OutputSetupExe -Algorithm SHA256).Hash.ToLower()
-    Write-Info "EXE SHA-256: $ExeHash"
-}
 
 Write-Info "=========================================================="
-Write-Ok "🎉 MSI 安裝套件封裝圓滿成功！"
+Write-Ok "🎉 單一 MSI 安裝套件封裝圓滿成功！"
 Write-Ok "MSI 安裝檔: $OutputMsi"
 Write-Ok "MSI 通用檔: $OutputGenericMsi"
-if (Test-Path $OutputSetupExe) {
-    Write-Ok "EXE 引導檔: $OutputSetupExe"
-    Write-Ok "EXE 通用檔: $OutputGenericSetupExe"
-}
 Write-Ok "檔案大小: $((Get-Item $OutputMsi).Length / 1MB | ForEach-Object { '{0:N2} MB' -f $_ })"
 Write-Info "=========================================================="
