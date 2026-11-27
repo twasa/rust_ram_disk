@@ -41,9 +41,15 @@
 ./scripts/build-local.ps1 -Destination "D:\Tools\RAMDisk" -RunBenchmark
 ```
 
-### 3. 正式發布與打包 (`build-release.ps1`)
+### 3. MSI 安裝套件打包 (`build-msi.ps1`)
 ```powershell
-# 執行完整測試、Release 編譯，並匯出可攜版 .exe、驅動安裝套件與 SHA-256 校驗表至 release-artifacts/
+# 自動透過 WiX Toolset 編譯出標準 Windows .msi 安裝套件 (包含桌面與開始功能表捷徑)
+./scripts/build-msi.ps1
+```
+
+### 4. 正式發布與全套件打包 (`build-release.ps1`)
+```powershell
+# 執行完整測試、Release 編譯、MSI 封裝，並匯出可攜版 .exe、.msi 安裝包與 SHA-256 校驗表至 release-artifacts/
 ./scripts/build-release.ps1
 ```
 
@@ -61,7 +67,7 @@ cargo run --release -- benchmark -s 512M -c lz4
 ### 啟動 RAM Disk 並常駐系統匣 (Systray)
 ```powershell
 # 建立 2GB RAM Disk，預設掛載 R:，啟用 LZ4 壓縮與系統匣圖示
-cargo run --release -- mount -s 2G -m R: -c lz4 --tray
+cargo run --release -- mount -s 10G -m S: -c lz4 --tray
 
 # 搭配快照檔案（啟動時自動載入，結束時自動回存）
 cargo run --release -- mount -s 4G -m R: -i D:\backup\ramdisk.img --tray

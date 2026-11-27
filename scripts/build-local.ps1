@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Rust RAM Disk 本地建置與部署腳本 (Build & Deploy to Local RAMDISK_HOME)
 

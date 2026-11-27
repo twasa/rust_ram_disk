@@ -140,3 +140,58 @@ fn test_concurrent_read_write() {
 
     assert_eq!(storage.allocated_blocks(), 8);
 }
+
+
+#[test]
+fn test_drive_snapshot_save_restore() {
+    let temp_dir = std::env::temp_dir().join(format!("ramdisk_test_{}", std::process::id()));
+    let source_dir = temp_dir.join("source");
+    let dest_dir = temp_dir.join("dest");
+    let snap_file = temp_dir.join("test_snapshot.img");
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::create_dir_all(&dest_dir).unwrap();
+
+    // Create test files
+    std::fs::write(source_dir.join("test1.txt"), b"Hello World").unwrap();
+    std::fs::create_dir_all(source_dir.join("subdir")).unwrap();
+    std::fs::write(source_dir.join("subdir").join("test2.bin"), vec![0xAB; 10000]).unwrap();
+
+    // Save snapshot with LZ4 compression
+    let saved = ImagePersistence::save_drive_snapshot(
+        source_dir.to_str().unwrap(),
+        &snap_file,
+        CompressionMode::Lz4,
+    ).unwrap();
+    assert_eq!(saved, 2);
+
+    // Restore snapshot to dest_dir
+    let restored = ImagePersistence::restore_drive_snapshot(
+        &snap_file,
+        dest_dir.to_str().unwrap(),
+    ).unwrap();
+    assert_eq!(restored, 2);
+
+    // Verify restored file contents
+    let c1 = std::fs::read(dest_dir.join("test1.txt")).unwrap();
+    assert_eq!(c1, b"Hello World");
+
+    let c2 = std::fs::read(dest_dir.join("subdir").join("test2.bin")).unwrap();
+    assert_eq!(c2, vec![0xAB; 10000]);
+
+    // Cleanup
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_vfs_normalize_mount_point() {
+    use rust_ram_disk::vfs::normalize_mount_point;
+    assert_eq!(normalize_mount_point("s").unwrap(), "S:");
+    assert_eq!(normalize_mount_point("S").unwrap(), "S:");
+    assert_eq!(normalize_mount_point("S:").unwrap(), "S:");
+    assert_eq!(normalize_mount_point("s:\\").unwrap(), "S:");
+    assert_eq!(normalize_mount_point("r:/").unwrap(), "R:");
+    assert!(normalize_mount_point("").is_err());
+    assert!(normalize_mount_point("123").is_err());
+}

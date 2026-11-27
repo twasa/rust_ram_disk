@@ -1,13 +1,14 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use tracing::info;
+use tracing::{error, warn};
 
 use rust_ram_disk::engine::{CompressionMode, SparseMemoryStorage, StorageEngine};
 use rust_ram_disk::persistence::ImagePersistence;
+use rust_ram_disk::vfs;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -43,7 +44,7 @@ enum Commands {
         #[arg(short, long, default_value = "1G")]
         size: String,
 
-        /// Windows drive letter or mount point
+        /// Windows drive letter or mount point (e.g. S: or R:)
         #[arg(short, long, default_value = "R:")]
         mount_point: String,
 
@@ -102,7 +103,11 @@ fn main() -> anyhow::Result<()> {
             let cap = parse_size(&size).map_err(|e| anyhow::anyhow!(e))?;
             println!("============================================================");
             println!("🚀 Rust RAM Disk Storage Engine In-Memory Benchmark");
-            println!("   Virtual Capacity : {} bytes ({:.2} MB)", cap, cap as f64 / (1024.0 * 1024.0));
+            println!(
+                "   Virtual Capacity : {} bytes ({:.2} MB)",
+                cap,
+                cap as f64 / (1024.0 * 1024.0)
+            );
             println!("   Compression      : {:?}", compress);
             println!("============================================================");
 
@@ -114,7 +119,10 @@ fn main() -> anyhow::Result<()> {
             let iterations = (total_test_bytes / chunk_size as u64) as usize;
             let write_buf: Vec<u8> = (0..chunk_size).map(|i| (i % 251) as u8).collect();
 
-            print!("-> Testing Sequential Write ({} MB)... ", total_test_bytes / (1024 * 1024));
+            print!(
+                "-> Testing Sequential Write ({} MB)... ",
+                total_test_bytes / (1024 * 1024)
+            );
             let start = Instant::now();
             for i in 0..iterations {
                 let offset = (i * chunk_size) as u64;
@@ -126,7 +134,10 @@ fn main() -> anyhow::Result<()> {
 
             // 2. Sequential Read Benchmark (64 KB chunks)
             let mut read_buf = vec![0u8; chunk_size];
-            print!("-> Testing Sequential Read ({} MB)... ", total_test_bytes / (1024 * 1024));
+            print!(
+                "-> Testing Sequential Read ({} MB)... ",
+                total_test_bytes / (1024 * 1024)
+            );
             let start = Instant::now();
             for i in 0..iterations {
                 let offset = (i * chunk_size) as u64;
@@ -153,7 +164,10 @@ fn main() -> anyhow::Result<()> {
             println!("{:.0} IOPS ({:.2?})", iops, duration);
 
             println!("------------------------------------------------------------");
-            println!("Physical Memory Allocated : {} KB", storage.physical_memory_used() / 1024);
+            println!(
+                "Physical Memory Allocated : {} KB",
+                storage.physical_memory_used() / 1024
+            );
             println!("Active Allocated Blocks   : {}", storage.allocated_blocks());
             println!("============================================================");
         }
@@ -166,35 +180,66 @@ fn main() -> anyhow::Result<()> {
             tray,
         } => {
             let capacity = parse_size(&size).map_err(|e| anyhow::anyhow!(e))?;
-            info!(
-                "Initializing RAM Disk: Capacity={:.2} MB, MountPoint={}, Compression={:?}",
-                capacity as f64 / (1024.0 * 1024.0),
-                mount_point,
-                compress
+            let norm_mount = vfs::normalize_mount_point(&mount_point)
+                .map_err(|e| anyhow::anyhow!(e))?;
+
+            println!("============================================================");
+            println!("🚀 Rust RAM Disk 掛載程序啟動");
+            println!("   目標磁碟機代號 : {}", norm_mount);
+            println!(
+                "   虛擬配置容量   : {} bytes ({:.2} MB)",
+                capacity,
+                capacity as f64 / (1024.0 * 1024.0)
             );
+            println!("   記憶體壓縮模式 : {:?}", compress);
+            println!("============================================================");
 
-            let storage = if let Some(ref img_path) = image {
-                if img_path.exists() {
-                    info!("Loading snapshot image from: {:?}", img_path);
-                    ImagePersistence::load_sparse(img_path, compress.into())?
+            // 1. 驅動環境檢核
+            if !vfs::is_driver_installed() {
+                eprintln!("\n❌ 錯誤：未偵測到已安裝之 WinFsp 核心檔案系統代理驅動！");
+                eprintln!("   Windows 必須註冊 WinFsp 核心驅動 (winfsp.sys) 才能建立虛擬磁碟機代號。");
+                eprintln!("------------------------------------------------------------");
+                eprintln!("👉 解決方式：");
+                if let Some(installer) = vfs::find_winfsp_installer() {
+                    eprintln!("   1. 請先執行專案安裝套件註冊驅動：");
+                    eprintln!("      {}", installer.display());
                 } else {
-                    info!("Snapshot file not found; creating fresh disk: {:?}", img_path);
-                    SparseMemoryStorage::new(capacity, 4096, compress.into())
+                    eprintln!("   1. 請安裝本專案提供的安裝套件 (RustRAMDisk.msi)");
                 }
-            } else {
-                SparseMemoryStorage::new(capacity, 4096, compress.into())
-            };
+                eprintln!("   2. 安裝完成後，重新執行本指令即可正常看見 {} 磁碟機。\n", norm_mount);
+                return Err(anyhow::anyhow!("WinFsp 核心驅動未安裝，掛載中止"));
+            }
 
-            let storage = Arc::new(storage);
+            // 2. 執行實體掛載
+            let mut mount_handle = vfs::mount_ram_disk(&norm_mount, capacity)
+                .map_err(|e| anyhow::anyhow!("掛載失敗: {}", e))?;
 
+            println!("🎉 虛擬磁碟機 {} 已成功掛載！", norm_mount);
+            println!("   您現在可在 Windows 檔案總管與命令列直接讀寫磁碟機 {}。", norm_mount);
+
+            // 3. 還原快照 (若指定且檔案存在)
+            if let Some(ref img_path) = image {
+                if img_path.exists() {
+                    println!("💾 正在還原快照映像檔: {:?}", img_path);
+                    match ImagePersistence::restore_drive_snapshot(img_path, &norm_mount) {
+                        Ok(count) => {
+                            println!("✅ 快照還原完成！共還原 {} 個檔案至 {}", count, norm_mount)
+                        }
+                        Err(e) => warn!("還原快照時發生錯誤: {}", e),
+                    }
+                }
+            }
+
+            // 4. 常駐管理 (系統匣 Systray 或 Console 模式)
             if tray {
                 #[cfg(target_os = "windows")]
                 {
                     use rust_ram_disk::tray::TrayManager;
-                    let tray_manager = TrayManager::new("Rust RAM Disk", &mount_point, &size)?;
+                    let tray_manager =
+                        TrayManager::new("Rust RAM Disk", &norm_mount, &size)?;
                     let menu_channel = muda::MenuEvent::receiver();
-                    println!("🚀 RAM Disk running. System Tray icon active in taskbar.");
-                    println!("   Right click tray icon to inspect status, save snapshot or exit.");
+                    println!("\n📌 系統匣圖示 (Systray) 已在右下角常駐。");
+                    println!("   右鍵點擊系統匣圖示可隨時儲存快照、卸載磁碟或退出程式。");
 
                     unsafe {
                         use windows::Win32::UI::WindowsAndMessaging::{
@@ -214,19 +259,31 @@ fn main() -> anyhow::Result<()> {
                                 if event.id == tray_manager.exit_item.id()
                                     || event.id == tray_manager.unmount_item.id()
                                 {
-                                    println!("🛑 Exit/Unmount requested from tray menu.");
+                                    println!("🛑 收到系統匣卸載與退出指令。");
                                     running = false;
                                     break;
                                 } else if event.id == tray_manager.snapshot_item.id() {
-                                    if let Some(ref img_path) = image {
-                                        let _ = ImagePersistence::save_sparse(&storage, img_path);
-                                        println!("💾 Snapshot saved to {:?}", img_path);
-                                    } else {
-                                        let fallback = PathBuf::from("ramdisk_snapshot.img");
-                                        let _ = ImagePersistence::save_sparse(&storage, &fallback);
-                                        println!("💾 Snapshot saved to {:?}", fallback);
+                                    let target_img = image
+                                        .as_deref()
+                                        .unwrap_or_else(|| Path::new("ramdisk_snapshot.img"));
+                                    match ImagePersistence::save_drive_snapshot(
+                                        &norm_mount,
+                                        target_img,
+                                        compress.into(),
+                                    ) {
+                                        Ok(count) => println!(
+                                            "💾 快照儲存完成！已打包 {} 個檔案至 {:?}",
+                                            count, target_img
+                                        ),
+                                        Err(e) => error!("儲存快照失敗: {}", e),
                                     }
                                 }
+                            }
+
+                            // 檢查底層掛載程序是否意外中斷
+                            if !mount_handle.is_alive() {
+                                eprintln!("⚠️ 偵測到掛載服務中斷，退出系統匣。");
+                                break;
                             }
 
                             let _ = MsgWaitForMultipleObjects(None, false, 100, QS_ALLINPUT);
@@ -234,22 +291,32 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
             } else {
-                println!("🚀 RAM Disk started without Tray GUI. Press Ctrl+C to terminate.");
+                println!("🚀 RAM Disk 已以 Console 模式常駐。按下 Ctrl+C 即可終止並安全卸載。");
                 let running = Arc::new(AtomicBool::new(true));
                 let r = running.clone();
                 ctrlc::set_handler(move || {
                     r.store(false, Ordering::SeqCst);
                 })?;
-                while running.load(Ordering::SeqCst) {
+                while running.load(Ordering::SeqCst) && mount_handle.is_alive() {
                     std::thread::sleep(std::time::Duration::from_millis(500));
                 }
             }
 
+            // 5. 結束前自動回存快照與安全卸載
             if let Some(ref img_path) = image {
-                info!("Saving snapshot before unmounting to: {:?}", img_path);
-                ImagePersistence::save_sparse(&storage, img_path)?;
-                println!("💾 Snapshot successfully saved to {:?}", img_path);
+                println!("💾 退出前自動儲存最新快照至: {:?}", img_path);
+                if let Err(e) =
+                    ImagePersistence::save_drive_snapshot(&norm_mount, img_path, compress.into())
+                {
+                    error!("自動儲存快照失敗: {}", e);
+                } else {
+                    println!("✅ 快照已成功更新。");
+                }
             }
+
+            println!("⏏️ 正在安全卸載磁碟機 {}...", norm_mount);
+            let _ = mount_handle.unmount();
+            println!("✅ 磁碟機 {} 已完全卸載，程式結束。", norm_mount);
         }
     }
 

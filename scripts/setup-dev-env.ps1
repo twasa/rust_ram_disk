@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Rust RAM Disk Windows 開發環境自動化檢核與安裝腳本 (PowerShell 7+ / pwsh)
 

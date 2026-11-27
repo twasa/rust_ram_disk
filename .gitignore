@@ -5,5 +5,8 @@ release-artifacts/
 *.pdb
 *.img
 tools/*.msi
+tools/wix/
+tools/llvm/
+tools/winfsp_bin/
 .vscode/
 .idea/

@@ -97,8 +97,15 @@ if (-not (Test-Path $BuiltExe)) {
     throw "未找到編譯產物: $BuiltExe"
 }
 
-# 3. 整理發布產物並計算 SHA-256
-Write-Info "`n>>> [3/3] 匯出交付產物至 release-artifacts/..."
+# 3. 呼叫 build-msi.ps1 封裝 Windows .msi 安裝套件
+Write-Info "`n>>> [3/4] 呼叫 build-msi.ps1 封裝官方 MSI 安裝套件..."
+$BuildMsiScript = Join-Path $ScriptDir "build-msi.ps1"
+if (Test-Path $BuildMsiScript) {
+    & $BuildMsiScript -Version $Version
+}
+
+# 4. 整理發布產物並計算 SHA-256
+Write-Info "`n>>> [4/4] 匯出交付產物與計算校驗碼至 release-artifacts/..."
 
 # 拷貝通用名稱與帶版號名稱
 $TargetExe = Join-Path $OutDir "rust_ram_disk.exe"
