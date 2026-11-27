@@ -228,6 +228,11 @@ pub fn mount_ram_disk(mount_point_raw: &str, capacity_bytes: u64) -> Result<VfsM
     // -s <capacity_bytes>: 支援的單檔最大容量
     // -f: 關閉檔案控制代碼時立即 flush and purge 快取，確保跨程序讀取與預覽即時一致
     // -S: 指定 Root SDDL，包含 OICI 繼承與 FA 完全控制權，確保免安裝軟體可執行、檔案預覽與所有使用者讀寫權限
+    // -u: 指定 UNC 前綴，促使 WinFsp 透過 Windows 網路提供者 (MUP) 註冊磁碟機代號，
+    //     徹底消除 GetFinalPathNameByHandleW 的 Error 1005 (ERROR_UNRECOGNIZED_VOLUME)，
+    //     讓免安裝執行檔 (Portable .exe)、PE Loader、WebView2 及各類應用程式皆能正常執行與解析路徑。
+    let drive_letter = mount_point.trim_end_matches(':').to_lowercase();
+    let unc_prefix = format!("\\rustramdisk\\{}", drive_letter);
     let sddl = "O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;WD)";
     let mut cmd = Command::new(&memfs_bin);
     cmd.arg("-i")
@@ -240,6 +245,8 @@ pub fn mount_ram_disk(mount_point_raw: &str, capacity_bytes: u64) -> Result<VfsM
         .arg("-f")
         .arg("-S")
         .arg(sddl)
+        .arg("-u")
+        .arg(&unc_prefix)
         .arg("-m")
         .arg(&mount_point);
 
