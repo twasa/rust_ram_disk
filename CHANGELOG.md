@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 新增 WiX Toolset 3.11 專案自動下載與配置支援。
 
 ### Fixed
+- **檔案總管容量顯示最佳化 (`src/vfs/mod.rs`)**:
+  - 將檔案節點上限自百萬級 ($1,048,576$) 收斂至黃金平衡值 ($1,024$)，使 WinFsp 回報給檔案總管之容量公式 ($MaxFileNodes \times MaxFileSize$) 回歸合理範圍。
+  - 徹底告別不合理的 2.00 PB 誇張數字，在 2GB 配置下自然顯示為標準硬碟常見的 2.00 TB，同時支援存放上千個檔案與完整單檔大容量寫入。
 - **安裝程式與自癒機制 (`scripts/build-msi.ps1`, `src/main.rs`)**:
   - 支援全新乾淨 Windows 環境一鍵安裝與自癒：WiX Burn 引導安裝包 (`RustRAMDiskSetup.exe`) 自動鏈結安裝 WinFsp 核心驅動程式與主程式。
   - 主程式支援離線驅動自癒與標準 UAC 提權引導。

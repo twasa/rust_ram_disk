@@ -406,6 +406,8 @@ pub fn mount_ram_disk(mount_point_raw: &str, capacity_bytes: u64) -> Result<VfsM
     // -m \\.\<mount_point>: 透過 Windows 掛載管理器 (Mount Manager, \Device\MountPointManager) 註冊為本機實體磁碟 (DRIVE_FIXED)，
     //     不僅檔案總管呈現標準本機硬碟圖示（非網路磁碟），更讓 GetFinalPathNameByHandleW 正確反查 Volume，
     //     免安裝軟體 (.exe)、PE Loader、WebView2 及檔案預覽皆能完美運作。
+    // -n 1024: 檔案節點上限設定為 1024，使 WinFsp 回報給檔案總管之 TotalSize (MaxFileNodes * MaxFileSize)
+    //          自然落在合理的 TB 級（例如 2GB 設定下剛好為 2.00 TB），徹底告別不合理的 2.00 PB 誇張數字。
     let mount_target = format!("\\\\.\\{}", mount_point);
     let sddl = "O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;WD)";
     let mut cmd = Command::new(&memfs_bin);
@@ -413,7 +415,7 @@ pub fn mount_ram_disk(mount_point_raw: &str, capacity_bytes: u64) -> Result<VfsM
         .arg("-F")
         .arg("NTFS")
         .arg("-n")
-        .arg("1048576")
+        .arg("1024")
         .arg("-s")
         .arg(capacity_bytes.to_string())
         .arg("-f")
