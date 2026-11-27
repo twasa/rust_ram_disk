@@ -7,7 +7,6 @@ release-artifacts/
 tools/*.msi
 tools/wix/
 tools/llvm/
-tools/winfsp_bin/
 .vscode/
 .idea/
 .worktrees/

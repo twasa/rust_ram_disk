@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Rust RAM Disk 自動化發布打包腳本 (Build Release & Export Artifacts)
 
@@ -105,24 +105,38 @@ Write-Info "`n>>> [3/4] 封裝 Windows 官方單一 MSI 安裝套件 (WiX Toolse
 
 # 定位工具目錄 (若在 .worktrees 中則自動指向主儲存庫共用之 tools)
 $ToolsDir = Join-Path $ProjectRoot "tools"
-if (-not (Test-Path (Join-Path $ToolsDir "winfsp-installer.msi"))) {
+if (-not (Test-Path (Join-Path $ToolsDir "winfsp_bin\memfs-x64.exe"))) {
     $parentRepo = Split-Path (Split-Path $ProjectRoot -Parent) -Parent
     $parentTools = Join-Path $parentRepo "tools"
-    if (Test-Path (Join-Path $parentTools "winfsp-installer.msi")) {
+    if (Test-Path (Join-Path $parentTools "winfsp_bin\memfs-x64.exe")) {
         $ToolsDir = $parentTools
         Write-Info "已偵測並共用主儲存庫之相依工具目錄: $ToolsDir"
     }
 }
-$WixDir = Join-Path $ToolsDir "wix"
-$Candle = Join-Path $WixDir "candle.exe"
-$Light = Join-Path $WixDir "light.exe"
 
-if ((-not (Test-Path $Candle)) -or (-not (Test-Path $Light))) {
-    Write-Info "正在自動配置 WiX Toolset 編譯工具鏈至 tools/wix..."
-    if (-not (Test-Path $WixDir)) { New-Item -ItemType Directory -Force -Path $WixDir | Out-Null }
-    $wixZip = "$env:TEMP\wix311-binaries.zip"
-    curl.exe -L -o $wixZip "https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311-binaries.zip"
-    Expand-Archive -Path $wixZip -DestinationPath $WixDir -Force
+# 檢核 WiX Toolset 編譯器 (優先尋找系統既有或 GitHub Actions 預裝之 WiX 3.11)
+$Candle = Get-Command "candle.exe" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue
+$Light = Get-Command "light.exe" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue
+
+if (-not $Candle -or -not $Light) {
+    $SysWixBin = "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin"
+    if ((Test-Path (Join-Path $SysWixBin "candle.exe")) -and (Test-Path (Join-Path $SysWixBin "light.exe"))) {
+        $Candle = Join-Path $SysWixBin "candle.exe"
+        $Light = Join-Path $SysWixBin "light.exe"
+    }
+}
+
+if (-not $Candle -or -not $Light) {
+    $WixDir = Join-Path $ToolsDir "wix"
+    $Candle = Join-Path $WixDir "candle.exe"
+    $Light = Join-Path $WixDir "light.exe"
+    if ((-not (Test-Path $Candle)) -or (-not (Test-Path $Light))) {
+        Write-Info "正在自動配置 WiX Toolset 編譯工具鏈至 tools/wix..."
+        if (-not (Test-Path $WixDir)) { New-Item -ItemType Directory -Force -Path $WixDir | Out-Null }
+        $wixZip = "$env:TEMP\wix311-binaries.zip"
+        curl.exe -L -o $wixZip "https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311-binaries.zip"
+        Expand-Archive -Path $wixZip -DestinationPath $WixDir -Force
+    }
 }
 Write-Ok "WiX 編譯器就緒: $Candle"
 Write-Ok "WiX 連結器就緒: $Light"
@@ -144,23 +158,11 @@ if (-not (Test-Path $InstallerMsi)) {
     }
 }
 
-# 確保 winfsp_bin 存在 (若無則自 winfsp-installer.msi 自動抽取)
+# 確保 winfsp_bin 存在
 $WinfspBinDir = Join-Path $ToolsDir "winfsp_bin"
 $MemfsBin = Join-Path $WinfspBinDir "memfs-x64.exe"
 if (-not (Test-Path $MemfsBin)) {
-    if (Test-Path $InstallerMsi) {
-        Write-Info "正在自 winfsp-installer.msi 提取配套執行檔..."
-        $tempExtract = Join-Path $env:TEMP "winfsp_extract_auto"
-        Start-Process msiexec.exe -ArgumentList "/a", "`"$InstallerMsi`"", "/qn", "`"TARGETDIR=$tempExtract`"" -Wait
-        $srcDir = Join-Path $tempExtract "DYNAMIC\SxS\DYNAMIC\bin"
-        if (Test-Path $srcDir) {
-            if (-not (Test-Path $WinfspBinDir)) { New-Item -ItemType Directory -Force -Path $WinfspBinDir | Out-Null }
-            Copy-Item (Join-Path $srcDir "memfs-x64.exe") $WinfspBinDir -Force
-            Copy-Item (Join-Path $srcDir "winfsp-x64.dll") $WinfspBinDir -Force
-            Copy-Item (Join-Path $srcDir "winfsp-x64.sys") $WinfspBinDir -Force
-        }
-        Remove-Item -Recurse -Force $tempExtract -ErrorAction SilentlyContinue
-    }
+    throw "未找到必要的 WinFsp 配套執行檔: $MemfsBin"
 }
 
 # 複製打包必備檔案至臨時分區 (Staging)
