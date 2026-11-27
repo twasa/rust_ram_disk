@@ -286,13 +286,13 @@ pub fn find_memfs_binary() -> Result<PathBuf, VfsError> {
         }
     }
 
-    // 2. WinFsp 系統標準安裝目錄
-    candidates.push(PathBuf::from("C:\\Program Files (x86)\\WinFsp\\bin\\memfs-x64.exe"));
-    candidates.push(PathBuf::from("C:\\Program Files\\WinFsp\\bin\\memfs-x64.exe"));
-
-    // 3. 專案內部工具目錄
+    // 2. 專案內部工具目錄 (開發與建置優先使用本專案客製優化之 MemFS)
     candidates.push(PathBuf::from("tools\\winfsp_bin\\memfs-x64.exe"));
     candidates.push(PathBuf::from("tools/winfsp_bin/memfs-x64.exe"));
+
+    // 3. WinFsp 系統標準安裝目錄
+    candidates.push(PathBuf::from("C:\\Program Files (x86)\\WinFsp\\bin\\memfs-x64.exe"));
+    candidates.push(PathBuf::from("C:\\Program Files\\WinFsp\\bin\\memfs-x64.exe"));
 
     for candidate in candidates {
         if candidate.exists() {
@@ -399,23 +399,21 @@ pub fn mount_ram_disk(mount_point_raw: &str, capacity_bytes: u64) -> Result<VfsM
     // 啟動 memfs:
     // -i: 忽略檔名大小寫 (Windows 應用程式相容必要)
     // -F NTFS: 模擬為 NTFS 檔案系統格式 (Windows 執行檔、提權執行與總管辨識必備)
-    // -n 1048576: 節點上限擴充至 1,048,576 (避免複製大量檔案的免安裝軟體時超過預設 1024 上限)
-    // -s <capacity_bytes>: 支援的單檔最大容量
+    // -C <capacity_bytes>: 精確設定虛擬磁碟總容量，檔案總管顯示精確容量 (例如 2.00 GB)
+    // -s <capacity_bytes>: 支援的單檔最大容量 (允許單檔達磁碟上限)
     // -f: 關閉檔案控制代碼時立即 flush and purge 快取，確保跨程序讀取與預覽即時一致
     // -S: 指定 Root SDDL，包含 OICI 繼承與 FA 完全控制權，確保免安裝軟體可執行、檔案預覽與所有使用者讀寫權限
     // -m \\.\<mount_point>: 透過 Windows 掛載管理器 (Mount Manager, \Device\MountPointManager) 註冊為本機實體磁碟 (DRIVE_FIXED)，
     //     不僅檔案總管呈現標準本機硬碟圖示（非網路磁碟），更讓 GetFinalPathNameByHandleW 正確反查 Volume，
     //     免安裝軟體 (.exe)、PE Loader、WebView2 及檔案預覽皆能完美運作。
-    // -n 1024: 檔案節點上限設定為 1024，使 WinFsp 回報給檔案總管之 TotalSize (MaxFileNodes * MaxFileSize)
-    //          自然落在合理的 TB 級（例如 2GB 設定下剛好為 2.00 TB），徹底告別不合理的 2.00 PB 誇張數字。
     let mount_target = format!("\\\\.\\{}", mount_point);
     let sddl = "O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;WD)";
     let mut cmd = Command::new(&memfs_bin);
     cmd.arg("-i")
         .arg("-F")
         .arg("NTFS")
-        .arg("-n")
-        .arg("1024")
+        .arg("-C")
+        .arg(capacity_bytes.to_string())
         .arg("-s")
         .arg(capacity_bytes.to_string())
         .arg("-f")

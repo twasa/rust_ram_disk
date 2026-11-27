@@ -1,6 +1,6 @@
 [package]
 name = "rust_ram_disk"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["William Wang <5100752+twasa@users.noreply.github.com>"]
 description = "High-performance RAM Disk with Dynamic Sparse Allocation, Transparent Compression, and Windows Systray Integration"
