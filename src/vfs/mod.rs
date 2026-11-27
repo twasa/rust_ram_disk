@@ -36,32 +36,80 @@ pub enum VfsError {
     MountPointInUse(String),
 }
 
-/// 檢查系統是否已安裝並註冊 WinFsp 核心驅動 (winfsp.sys)
+/// 檢查系統是否已安裝並註冊 WinFsp 核心驅動 (winfsp.sys / WinFsp.Launcher)
 pub fn is_driver_installed() -> bool {
-    // 1. 檢查 Windows 核心驅動服務登錄檔 (winfsp 核心驅動服務註冊)
-    let service_installed = {
-        let hklm = windows::Win32::System::Registry::HKEY_LOCAL_MACHINE;
-        unsafe {
-            use windows::core::w;
-            use windows::Win32::System::Registry::{RegOpenKeyExW, HKEY, KEY_READ};
-            let mut sub_key = HKEY::default();
-            RegOpenKeyExW(
-                hklm,
-                w!("SYSTEM\\CurrentControlSet\\Services\\winfsp"),
-                0,
-                KEY_READ,
-                &mut sub_key,
-            ).is_ok()
-        }
-    };
+    let hklm = windows::Win32::System::Registry::HKEY_LOCAL_MACHINE;
+    unsafe {
+        use windows::core::w;
+        use windows::Win32::System::Registry::{RegGetValueW, RegOpenKeyExW, HKEY, KEY_READ, RRF_RT_REG_SZ};
+        let mut sub_key = HKEY::default();
 
-    if service_installed {
-        return true;
+        // 1. 檢查 WinFsp.Launcher 核心服務 (WinFsp 官方常駐與驅動代理服務)
+        if RegOpenKeyExW(
+            hklm,
+            w!("SYSTEM\\CurrentControlSet\\Services\\WinFsp.Launcher"),
+            0,
+            KEY_READ,
+            &mut sub_key,
+        )
+        .is_ok()
+        {
+            return true;
+        }
+
+        // 2. 檢查 WinFsp.Np (WinFsp 網路提供者服務)
+        if RegOpenKeyExW(
+            hklm,
+            w!("SYSTEM\\CurrentControlSet\\Services\\WinFsp.Np"),
+            0,
+            KEY_READ,
+            &mut sub_key,
+        )
+        .is_ok()
+        {
+            return true;
+        }
+
+        // 3. 檢查 WOW6432Node\WinFsp\InstallDir (官方 32-bit MSI 安裝程式寫入之基準路徑)
+        let mut buf = [0u16; 260];
+        let mut pcb_data = (buf.len() * 2) as u32;
+        if RegGetValueW(
+            hklm,
+            w!("SOFTWARE\\WOW6432Node\\WinFsp"),
+            w!("InstallDir"),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buf.as_mut_ptr() as *mut _),
+            Some(&mut pcb_data),
+        )
+        .is_ok()
+        {
+            return true;
+        }
+
+        // 4. 檢查 HKLM\SOFTWARE\WinFsp\InstallDir (官方 64-bit 原生安裝路徑)
+        let mut buf64 = [0u16; 260];
+        let mut pcb_data64 = (buf64.len() * 2) as u32;
+        if RegGetValueW(
+            hklm,
+            w!("SOFTWARE\\WinFsp"),
+            w!("InstallDir"),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buf64.as_mut_ptr() as *mut _),
+            Some(&mut pcb_data64),
+        )
+        .is_ok()
+        {
+            return true;
+        }
     }
 
-    // 2. 備用檢查：檢查標準安裝路徑下的 winfsp-x64.sys 核心驅動檔案
-    let sys_path = Path::new("C:\\Windows\\System32\\drivers\\winfsp-x64.sys");
-    if sys_path.exists() {
+    // 5. 備用檢查：檢查標準安裝路徑下的驅動檔案或工具程式
+    if Path::new("C:\\Program Files (x86)\\WinFsp\\bin\\fsptool-x64.exe").exists()
+        || Path::new("C:\\Program Files\\WinFsp\\bin\\fsptool-x64.exe").exists()
+        || Path::new("C:\\Windows\\System32\\drivers\\winfsp-x64.sys").exists()
+    {
         return true;
     }
 
@@ -455,4 +503,24 @@ pub fn mount_ram_disk(mount_point_raw: &str, capacity_bytes: u64) -> Result<VfsM
 
     info!("Successfully mounted RAM Disk to {}", mount_point);
     Ok(handle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_mount_point() {
+        assert_eq!(normalize_mount_point("r").unwrap(), "R:");
+        assert_eq!(normalize_mount_point("R:").unwrap(), "R:");
+        assert_eq!(normalize_mount_point("R:\\").unwrap(), "R:");
+        assert_eq!(normalize_mount_point("s/").unwrap(), "S:");
+        assert!(normalize_mount_point("123").is_err());
+    }
+
+    #[test]
+    fn test_is_driver_installed_status() {
+        let installed = is_driver_installed();
+        println!("WinFsp driver installed status on this system: {}", installed);
+    }
 }

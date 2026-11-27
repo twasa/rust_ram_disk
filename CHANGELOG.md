@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-28
+
+### Fixed
+- **精準 WinFsp.Launcher 服務與 64 位元安裝路徑檢測 (Accurate WinFsp Service & WOW64 Detection)**:
+  - 修正核心服務名稱判定：WinFsp 官方安裝套件在 Windows 註冊之核心常駐與驅動代理服務名稱為 `WinFsp.Launcher` 與 `WinFsp.Np`（並非單純字串 `winfsp`），且在 64 位元系統之標準安裝路徑記錄於 `HKLM\SOFTWARE\WOW6432Node\WinFsp\InstallDir`。
+  - 將檢測邏輯升級為覆蓋 `WinFsp.Launcher` 核心服務、`WOW6432Node\WinFsp\InstallDir`、原生 `SOFTWARE\WinFsp\InstallDir` 與 `fsptool-x64.exe`，徹底解決自動安裝完成後因服務名稱不符而誤報「WinFsp 核心驅動尚未安裝」的異常。
+  - 新增核心驅動檢測單元測試 (`test_is_driver_installed_status`)。
+
 ## [0.1.2] - 2026-11-28
 
 ### Fixed
