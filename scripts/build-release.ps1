@@ -150,7 +150,7 @@ $InstallerMsi = Join-Path $ToolsDir "winfsp-installer.msi"
 if (-not (Test-Path $InstallerMsi)) {
     Write-Info "正在自動下載 WinFsp 官方離線安裝套件至 $InstallerMsi..."
     if (-not (Test-Path $ToolsDir)) { New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null }
-    $winfspUrl = "https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-2.0.23075.msi"
+    $winfspUrl = "https://github.com/winfsp/winfsp/releases/download/v2.2/winfsp-2.2.26323.msi"
     try {
         Invoke-WebRequest -Uri $winfspUrl -OutFile $InstallerMsi
     } catch {

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-28
+
+### Fixed
+- **修復 WinFsp 記憶體檔案系統原生模組崩潰 (Fix MemFS Crash in USER32.dll `wvsprintfW`)**:
+  - 排查根本原因：MemFS 原生模組在調用 WinFsp `FspServiceLog` 輸出日誌時，底層調用了 Windows `USER32.dll` 的 `wvsprintfW`；然而 `wvsprintfW` 不支援 64 位元之 `%llu` 格式化符號（僅支援 `%I64u`），導致 64 位元整數被當作 32 位元讀取，致使堆疊參數偏移 4 個位元組，後續 `%s` 字串參數讀取到錯誤指標而觸發 Access Violation `0xC0000005` 崩潰。
+  - 將 `%llu` 全面修正為相容的 `%I64u`，並修復 `OtherFlags` 位元遮罩覆蓋問題，重新編譯並交付新版 `memfs-x64.exe`，徹底根絕 MemFS 剛啟動即閃退的重大缺陷。
+
+### Added
+- **參考 RFM 打造完整結構化日誌系統 (RFM-Grade Structured Logging & Panic Hook)** (`src/logger.rs`, `src/main.rs`):
+  - 引入與 Rust File Manager (RFM) 相同標準之結構化日誌架構，支援 JSON Lines (`.jsonl`) 與文字格式。
+  - 自動於 `%LOCALAPPDATA%\RustRAMDisk\logs\rust_ram_disk.jsonl` 保存執行歷程，並內建 5 MB 自動輪替機制。
+  - 安裝全域 Panic 攔截器 (`install_panic_hook`)，未預期錯誤皆能完整留存堆疊與執行脈絡。
+  - 追蹤記錄應用程式完整生命週期：PID、命令列參數、UAC 提權請求、WinFsp 核心驅動偵測結果、掛載參數、進程狀態與正常/異常退出原因。
+- **系統匣整合「查看運行日誌」選單與異常退出告警 (Tray Log Viewer & Crash Alert)** (`src/tray/mod.rs`, `src/main.rs`):
+  - 在系統匣右鍵選單新增「📋 查看運行日誌 (View Logs)...」，一鍵直接於 Windows 預設文字編輯器開啟日誌檔。
+  - 在底層掛載程序無預警中斷時，主動記錄退出代碼並於桌面彈出 Win32 錯誤提示視窗與日誌檔案路徑，杜絕無聲無息默默結束程式。
+- **升級 WinFsp 官方安裝套件為 v2.2 正式版 (`scripts/build-release.ps1`)**:
+  - 同步將下載與打包之 WinFsp 安裝套件升級為最新 2026 正式發布版 `v2.2.26323`，與編譯鏈之頭文件與 DLL 完全相容。
+
 ## [0.1.3] - 2026-11-28
 
 ### Fixed
