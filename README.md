@@ -14,14 +14,42 @@
 
 | 測試項目 | 無壓縮模式 (None) | LZ4 透明壓縮模式 (Lz4) |
 | :--- | :--- | :--- |
-| **循序寫入 (Seq Write)** | 2,223 MB/s | **3,099 MB/s** |
-| **循序讀取 (Seq Read)** | 6,020 MB/s | **6,245 MB/s** |
-| **4K 隨機寫入 (4K Random Write)** | 641,341 IOPS | **1,044,380 IOPS** |
+| **循序寫入 (Seq Write)** | 2,223 MB/s | **3,388 MB/s** |
+| **循序讀取 (Seq Read)** | 6,020 MB/s | **6,530 MB/s** |
+| **4K 隨機寫入 (4K Random Write)** | 641,341 IOPS | **1,031,183 IOPS (破百萬)** |
 | **256 MB 資料實體記憶體佔用** | 262,144 KB (100%) | **5,776 KB (2.2%)** |
 
-## 🚀 指令與操作指南
+## 🛠️ 自動化工程腳本 (PowerShell 7+ Scripts)
 
-### 1. 執行效能基準測試
+比照專案工程規範，於 `scripts/` 提供一鍵環境配置、本地部署與發布打包腳本：
+
+### 1. 環境檢核與安裝導引 (`setup-dev-env.ps1`)
+```powershell
+# 檢核環境工具鏈狀態（Rust、MSVC、WinFsp 驅動與登錄檔）
+./scripts/setup-dev-env.ps1 -CheckOnly
+
+# 自動啟動專案內建之 WinFsp 安裝精靈註冊驅動
+./scripts/setup-dev-env.ps1 -InstallWinFsp
+```
+
+### 2. 本機建置與自動部署 (`build-local.ps1`)
+```powershell
+# 一鍵編譯並部署至 $HOME\RAMDisk（並產生 start-ramdisk.bat 快捷啟動檔）
+./scripts/build-local.ps1
+
+# 部署至指定目錄並在完成後立即執行記憶體儲存引擎驗證壓測
+./scripts/build-local.ps1 -Destination "D:\Tools\RAMDisk" -RunBenchmark
+```
+
+### 3. 正式發布與打包 (`build-release.ps1`)
+```powershell
+# 執行完整測試、Release 編譯，並匯出可攜版 .exe、驅動安裝套件與 SHA-256 校驗表至 release-artifacts/
+./scripts/build-release.ps1
+```
+
+## 🚀 CLI 指令與手動操作
+
+### 執行效能基準測試
 ```powershell
 # 無壓縮測試
 cargo run --release -- benchmark -s 512M -c none
@@ -30,7 +58,7 @@ cargo run --release -- benchmark -s 512M -c none
 cargo run --release -- benchmark -s 512M -c lz4
 ```
 
-### 2. 啟動 RAM Disk 並常駐系統匣 (Systray)
+### 啟動 RAM Disk 並常駐系統匣 (Systray)
 ```powershell
 # 建立 2GB RAM Disk，預設掛載 R:，啟用 LZ4 壓縮與系統匣圖示
 cargo run --release -- mount -s 2G -m R: -c lz4 --tray
@@ -38,11 +66,3 @@ cargo run --release -- mount -s 2G -m R: -c lz4 --tray
 # 搭配快照檔案（啟動時自動載入，結束時自動回存）
 cargo run --release -- mount -s 4G -m R: -i D:\backup\ramdisk.img --tray
 ```
-
-## 🛠️ 開發環境與 WinFsp 整合
-
-專案已將核心引擎與驅動介面完成解耦設計：
-1. **核心引擎（預設啟用）**：純 Rust 開發，具備完整的 Sparse 儲存、LZ4 壓縮、快照與 Systray 圖示功能。
-2. **WinFsp 檔案系統驅動**：
-   - 官方安裝包已下載備妥於 `tools/winfsp-installer.msi`。
-   - 若要開啟直接掛載至 Windows 檔案總管的磁碟機代號，雙擊執行 `tools/winfsp-installer.msi` 安裝一次即可。

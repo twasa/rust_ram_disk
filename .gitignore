@@ -1,7 +1,9 @@
 /target/
+dist/
+release-artifacts/
 **/*.rs.bk
 *.pdb
 *.img
-*.msi
+tools/*.msi
 .vscode/
 .idea/
