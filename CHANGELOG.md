@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-28
+
 ### Added
 - **Windows 系統服務常駐生命週期架構 (Windows System Service Architecture)** (`src/service/mod.rs`):
   - 核心 RAM Disk 由獨立背景 Windows 服務 (`RustRamDiskService`) 代管，隨系統開機自動於背景掛載為本機全域實體硬碟 (`DRIVE_FIXED`)。
