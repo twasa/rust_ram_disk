@@ -55,6 +55,7 @@ param(
     [string]$CertDir = (Join-Path $HOME ".code-signing"),
     [string]$CommonName = "William Wang (DevOps Code Signing)",
     [string]$Password = "",
+    [switch]$SkipIfMissing,
     [switch]$Force
 )
 
@@ -264,11 +265,19 @@ if ($Action -eq "InstallTrust") {
 # ============================================================================
 if ($Action -eq "Sign") {
     if (-not (Test-Path $PfxPath)) {
+        if ($SkipIfMissing) {
+            Write-Warn "找不到私鑰憑證 $PfxPath，因指定 -SkipIfMissing 略過代碼簽署。"
+            exit 0
+        }
         throw "找不到私鑰憑證 $PfxPath，請先執行 -Action Create 產生憑證！"
     }
 
     $signtool = Find-Signtool
     if (-not $signtool) {
+        if ($SkipIfMissing) {
+            Write-Warn "未找到 signtool.exe，因指定 -SkipIfMissing 略過代碼簽署。"
+            exit 0
+        }
         throw "未找到 signtool.exe！請安裝 Windows 10/11 SDK。"
     }
 
