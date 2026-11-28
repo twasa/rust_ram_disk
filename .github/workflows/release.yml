@@ -5,6 +5,11 @@ on:
     tags:
       - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag to attach artifacts to (e.g. v0.2.0)"
+        required: false
+        default: "v0.2.0"
 
 permissions:
   contents: write
@@ -23,7 +28,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Provision Code Signing Certificate
-        if: env.WINDOWS_CERTIFICATE_BASE64 != ''
+        if: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' }}
         env:
           WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
@@ -41,6 +46,7 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || 'v0.2.0' }}
           files: |
             release-artifacts/*.msi
             release-artifacts/SHA256SUMS.txt
