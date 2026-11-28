@@ -15,7 +15,10 @@ use windows::Win32::UI::Controls::Dialogs::{
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+use crate::service::{self, ServiceConfig, ServiceState};
+
 pub const WM_APP_APPLY_SETTINGS: u32 = WM_APP + 201;
+pub const WM_APP_SERVICE_STATE_CHANGED: u32 = WM_APP + 202;
 
 // 控制項識別碼
 const ID_DRIVE_COMBO: u16 = 101;
@@ -28,6 +31,12 @@ const ID_APPLY_BTN: u16 = 107;
 const ID_CANCEL_BTN: u16 = 108;
 const ID_STATUS_LABEL: u16 = 109;
 
+const ID_SVC_INSTALL_START_BTN: u16 = 120;
+const ID_SVC_START_BTN: u16 = 121;
+const ID_SVC_STOP_BTN: u16 = 122;
+const ID_SVC_UNINSTALL_BTN: u16 = 123;
+const ID_SVC_STATUS_LABEL: u16 = 124;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettingsConfig {
     pub mount_point: String,
@@ -35,6 +44,30 @@ pub struct SettingsConfig {
     pub compress: String,
     pub image_path: Option<String>,
     pub auto_start: bool,
+}
+
+impl From<ServiceConfig> for SettingsConfig {
+    fn from(s: ServiceConfig) -> Self {
+        Self {
+            mount_point: s.mount_point,
+            size: s.size,
+            compress: s.compress,
+            image_path: s.image_path,
+            auto_start: s.auto_start,
+        }
+    }
+}
+
+impl From<SettingsConfig> for ServiceConfig {
+    fn from(s: SettingsConfig) -> Self {
+        Self {
+            mount_point: s.mount_point,
+            size: s.size,
+            compress: s.compress,
+            image_path: s.image_path,
+            auto_start: s.auto_start,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -52,13 +85,19 @@ pub fn take_pending_config() -> Option<SettingsConfig> {
     PENDING_CONFIG.lock().unwrap().take()
 }
 
-/// 自登錄檔讀取設定 (若無則採用預設)
+/// 自登錄檔與全域設定檔讀取配置
 pub fn load_config_from_registry(
     default_mount: &str,
     default_size: &str,
     default_compress: &str,
     default_image: Option<&str>,
 ) -> SettingsConfig {
+    // 優先從 ServiceConfig (ProgramData/RustRamDisk/config.json) 讀取
+    let svc_cfg = ServiceConfig::load();
+    if ServiceConfig::config_path().exists() {
+        return svc_cfg.into();
+    }
+
     let mut config = SettingsConfig {
         mount_point: default_mount.to_string(),
         size: default_size.to_string(),
@@ -141,8 +180,12 @@ pub fn load_config_from_registry(
     config
 }
 
-/// 儲存設定至登錄檔並更新開機自動啟動項
+/// 儲存設定至全域設定檔與登錄檔
 pub fn save_config_to_registry(config: &SettingsConfig) {
+    // 1. 同步儲存至 ServiceConfig (C:\ProgramData\RustRamDisk\config.json)
+    let svc_cfg: ServiceConfig = config.clone().into();
+    let _ = svc_cfg.save();
+
     unsafe {
         let mut hkey = HKEY::default();
         if RegCreateKeyExW(
@@ -196,7 +239,7 @@ pub fn save_config_to_registry(config: &SettingsConfig) {
             let _ = RegCloseKey(hkey);
         }
 
-        // 開機自動啟動註冊
+        // 開機自動啟動註冊 (登錄檔 Run：讓 Systray 在使用者登入時常駐顯示)
         let mut run_key = HKEY::default();
         if RegOpenKeyExW(
             HKEY_CURRENT_USER,
@@ -209,18 +252,7 @@ pub fn save_config_to_registry(config: &SettingsConfig) {
         {
             if config.auto_start {
                 if let Ok(exe) = std::env::current_exe() {
-                    let mut cmd = format!(
-                        "\"{}\" mount -s {} -m {} -c {} --tray",
-                        exe.display(),
-                        config.size,
-                        config.mount_point,
-                        config.compress
-                    );
-                    if let Some(ref img) = config.image_path {
-                        if !img.is_empty() {
-                            cmd.push_str(&format!(" -i \"{}\"", img));
-                        }
-                    }
+                    let cmd = format!("\"{}\" --tray", exe.display());
                     let wide_cmd: Vec<u16> =
                         cmd.encode_utf16().chain(std::iter::once(0)).collect();
                     let _ = RegSetValueExW(
@@ -290,15 +322,15 @@ pub fn show_settings_window(host_hwnd: HWND, current_config: &SettingsConfig) {
     unsafe {
         let screen_w = GetSystemMetrics(SM_CXSCREEN);
         let screen_h = GetSystemMetrics(SM_CYSCREEN);
-        let width = 520;
-        let height = 480;
+        let width = 530;
+        let height = 620;
         let x = (screen_w - width) / 2;
         let y = (screen_h - height) / 2;
 
         let hwnd = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("RustRAMDisk_SettingsWindowClass"),
-            w!("Rust RAM Disk - 虛擬磁碟設定"),
+            w!("Rust RAM Disk - 虛擬磁碟與系統服務設定"),
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
             x,
             y,
@@ -340,6 +372,30 @@ unsafe fn create_font(size: i32, bold: bool) -> HFONT {
     )
 }
 
+fn get_service_status_text() -> String {
+    match service::query_status() {
+        Ok(ServiceState::Running) => {
+            "🟢 系統服務狀態：運行中 (Running) — 磁碟由服務全時維護，關閉 UI 磁碟不受影響".to_string()
+        }
+        Ok(ServiceState::Stopped) => {
+            "🟡 系統服務狀態：已停止 (Stopped) — 點擊下方按鈕啟動服務以掛載磁碟".to_string()
+        }
+        Ok(ServiceState::NotInstalled) => {
+            "⚪ 系統服務狀態：尚未安裝 (Not Installed) — 點擊「註冊並啟動」可常駐於系統".to_string()
+        }
+        Ok(other) => format!("🔵 系統服務狀態：{}", other),
+        Err(e) => format!("⚠️ 查詢服務失敗: {}", e),
+    }
+}
+
+unsafe fn update_service_labels(hwnd: HWND) {
+    if let Ok(st) = GetDlgItem(hwnd, ID_SVC_STATUS_LABEL as _) {
+        let text = get_service_status_text();
+        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        let _ = SetWindowTextW(st, PCWSTR(wide.as_ptr()));
+    }
+}
+
 unsafe fn init_controls(hwnd: HWND, config: &SettingsConfig) {
     let font = create_font(16, false);
     let bold_font = create_font(16, true);
@@ -349,7 +405,7 @@ unsafe fn init_controls(hwnd: HWND, config: &SettingsConfig) {
         SendMessageW(hctrl, WM_SETFONT, WPARAM(f.0 as usize), LPARAM(1));
     };
 
-    // 1. GroupBox: 目前磁碟狀態
+    // 1. GroupBox: 目前磁碟與服務狀態
     let gb1 = CreateWindowExW(
         WINDOW_EX_STYLE::default(),
         w!("BUTTON"),
@@ -357,7 +413,7 @@ unsafe fn init_controls(hwnd: HWND, config: &SettingsConfig) {
         WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_GROUPBOX as u32),
         15,
         10,
-        475,
+        485,
         75,
         hwnd,
         None,
@@ -368,7 +424,7 @@ unsafe fn init_controls(hwnd: HWND, config: &SettingsConfig) {
     set_ctrl_font(gb1, true);
 
     let status_text = format!(
-        "掛載代號：{}　｜　目前容量：{}　｜　壓縮：{}\n運行狀態：● 正常運作中 (已掛載至檔案總管)",
+        "掛載代號：{}　｜　目前容量：{}　｜　壓縮：{}\n運行架構：Windows System Service (隨系統啟動，關閉 UI 磁碟不受影響)",
         config.mount_point, config.size, config.compress
     );
     let wide_status: Vec<u16> = status_text.encode_utf16().chain(std::iter::once(0)).collect();
@@ -379,7 +435,7 @@ unsafe fn init_controls(hwnd: HWND, config: &SettingsConfig) {
         WS_CHILD | WS_VISIBLE,
         30,
         32,
-        440,
+        455,
         42,
         hwnd,
         HMENU(ID_STATUS_LABEL as _),
@@ -389,16 +445,16 @@ unsafe fn init_controls(hwnd: HWND, config: &SettingsConfig) {
     .unwrap_or_default();
     set_ctrl_font(st1, false);
 
-    // 2. GroupBox: 重新配置參數
+    // 2. GroupBox: 虛擬磁碟參數配置
     let gb2 = CreateWindowExW(
         WINDOW_EX_STYLE::default(),
         w!("BUTTON"),
-        w!("虛擬磁碟重新配置"),
+        w!("虛擬磁碟參數配置"),
         WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_GROUPBOX as u32),
         15,
         95,
-        475,
-        280,
+        485,
+        250,
         hwnd,
         None,
         HINSTANCE(std::ptr::null_mut()),
@@ -415,7 +471,7 @@ unsafe fn init_controls(hwnd: HWND, config: &SettingsConfig) {
         WS_CHILD | WS_VISIBLE,
         30,
         125,
-        130,
+        135,
         22,
         hwnd,
         None,
@@ -430,7 +486,7 @@ unsafe fn init_controls(hwnd: HWND, config: &SettingsConfig) {
         w!("COMBOBOX"),
         PCWSTR::null(),
         WS_CHILD | WS_VISIBLE | WS_VSCROLL | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
-        170,
+        175,
         122,
         295,
         200,
@@ -460,8 +516,8 @@ unsafe fn init_controls(hwnd: HWND, config: &SettingsConfig) {
         w!("記憶體容量 (Size):"),
         WS_CHILD | WS_VISIBLE,
         30,
-        165,
-        130,
+        160,
+        135,
         22,
         hwnd,
         None,
@@ -476,8 +532,8 @@ unsafe fn init_controls(hwnd: HWND, config: &SettingsConfig) {
         w!("COMBOBOX"),
         PCWSTR::null(),
         WS_CHILD | WS_VISIBLE | WS_VSCROLL | WINDOW_STYLE(CBS_DROPDOWN as u32),
-        170,
-        162,
+        175,
+        157,
         295,
         200,
         hwnd,
@@ -506,8 +562,8 @@ unsafe fn init_controls(hwnd: HWND, config: &SettingsConfig) {
         w!("壓縮模式 (Compress):"),
         WS_CHILD | WS_VISIBLE,
         30,
-        205,
-        130,
+        195,
+        135,
         22,
         hwnd,
         None,
@@ -522,8 +578,8 @@ unsafe fn init_controls(hwnd: HWND, config: &SettingsConfig) {
         w!("COMBOBOX"),
         PCWSTR::null(),
         WS_CHILD | WS_VISIBLE | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
-        170,
-        202,
+        175,
+        192,
         295,
         120,
         hwnd,
@@ -548,8 +604,8 @@ unsafe fn init_controls(hwnd: HWND, config: &SettingsConfig) {
         w!("快照映像檔路徑:"),
         WS_CHILD | WS_VISIBLE,
         30,
-        245,
-        130,
+        230,
+        135,
         22,
         hwnd,
         None,
@@ -566,8 +622,8 @@ unsafe fn init_controls(hwnd: HWND, config: &SettingsConfig) {
         w!("EDIT"),
         PCWSTR(wide_def_img.as_ptr()),
         WS_CHILD | WS_VISIBLE | WS_BORDER | WINDOW_STYLE(ES_AUTOHSCROLL as u32),
-        170,
-        242,
+        175,
+        227,
         215,
         24,
         hwnd,
@@ -583,8 +639,8 @@ unsafe fn init_controls(hwnd: HWND, config: &SettingsConfig) {
         w!("BUTTON"),
         w!("瀏覽..."),
         WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_PUSHBUTTON as u32),
-        395,
-        241,
+        400,
+        226,
         70,
         26,
         hwnd,
@@ -595,15 +651,15 @@ unsafe fn init_controls(hwnd: HWND, config: &SettingsConfig) {
     .unwrap_or_default();
     set_ctrl_font(btn_browse, false);
 
-    // 開機自動掛載啟動 Checkbox
+    // 開機自動啟動 Checkbox
     let chk_boot = CreateWindowExW(
         WINDOW_EX_STYLE::default(),
         w!("BUTTON"),
-        w!("隨 Windows 開機自動背景掛載啟動 (登錄檔 Run)"),
+        w!("隨 Windows 開機自動背景啟動 (服務設為 AutoStart + Systray 常駐)"),
         WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
         30,
-        285,
-        430,
+        265,
+        440,
         24,
         hwnd,
         HMENU(ID_AUTOSTART_CHECK as _),
@@ -620,12 +676,12 @@ unsafe fn init_controls(hwnd: HWND, config: &SettingsConfig) {
     let lbl_note = CreateWindowExW(
         WINDOW_EX_STYLE::default(),
         w!("STATIC"),
-        w!("💡 提示：點擊「套用並重新掛載」將自動儲存現有快照並無縫重新掛載。"),
+        w!("💡 提示：磁碟由系統服務全權代管，即使關閉本設定視窗或退出 Systray，磁碟機依然正常運作。"),
         WS_CHILD | WS_VISIBLE,
         30,
-        330,
-        435,
-        30,
+        300,
+        440,
+        35,
         hwnd,
         None,
         HINSTANCE(std::ptr::null_mut()),
@@ -634,14 +690,137 @@ unsafe fn init_controls(hwnd: HWND, config: &SettingsConfig) {
     .unwrap_or_default();
     set_ctrl_font(lbl_note, false);
 
-    // 3. 按鈕區
+    // 3. GroupBox: Windows 系統服務管理 (Service Management)
+    let gb3 = CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        w!("BUTTON"),
+        w!("Windows 系統服務管理"),
+        WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_GROUPBOX as u32),
+        15,
+        355,
+        485,
+        150,
+        hwnd,
+        None,
+        HINSTANCE(std::ptr::null_mut()),
+        None,
+    )
+    .unwrap_or_default();
+    set_ctrl_font(gb3, true);
+
+    let svc_text = get_service_status_text();
+    let wide_svc_text: Vec<u16> = svc_text.encode_utf16().chain(std::iter::once(0)).collect();
+    let lbl_svc = CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        w!("STATIC"),
+        PCWSTR(wide_svc_text.as_ptr()),
+        WS_CHILD | WS_VISIBLE,
+        30,
+        380,
+        455,
+        30,
+        hwnd,
+        HMENU(ID_SVC_STATUS_LABEL as _),
+        HINSTANCE(std::ptr::null_mut()),
+        None,
+    )
+    .unwrap_or_default();
+    set_ctrl_font(lbl_svc, false);
+
+    // 服務操作按鈕列
+    let btn_svc_install = CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        w!("BUTTON"),
+        w!("🚀 註冊並啟動服務"),
+        WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_PUSHBUTTON as u32),
+        30,
+        420,
+        140,
+        32,
+        hwnd,
+        HMENU(ID_SVC_INSTALL_START_BTN as _),
+        HINSTANCE(std::ptr::null_mut()),
+        None,
+    )
+    .unwrap_or_default();
+    set_ctrl_font(btn_svc_install, true);
+
+    let btn_svc_start = CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        w!("BUTTON"),
+        w!("▶️ 啟動服務"),
+        WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_PUSHBUTTON as u32),
+        180,
+        420,
+        95,
+        32,
+        hwnd,
+        HMENU(ID_SVC_START_BTN as _),
+        HINSTANCE(std::ptr::null_mut()),
+        None,
+    )
+    .unwrap_or_default();
+    set_ctrl_font(btn_svc_start, false);
+
+    let btn_svc_stop = CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        w!("BUTTON"),
+        w!("⏹️ 停止服務"),
+        WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_PUSHBUTTON as u32),
+        285,
+        420,
+        95,
+        32,
+        hwnd,
+        HMENU(ID_SVC_STOP_BTN as _),
+        HINSTANCE(std::ptr::null_mut()),
+        None,
+    )
+    .unwrap_or_default();
+    set_ctrl_font(btn_svc_stop, false);
+
+    let btn_svc_uninst = CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        w!("BUTTON"),
+        w!("🗑️ 卸載服務"),
+        WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_PUSHBUTTON as u32),
+        390,
+        420,
+        95,
+        32,
+        hwnd,
+        HMENU(ID_SVC_UNINSTALL_BTN as _),
+        HINSTANCE(std::ptr::null_mut()),
+        None,
+    )
+    .unwrap_or_default();
+    set_ctrl_font(btn_svc_uninst, false);
+
+    let lbl_svc_hint = CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        w!("STATIC"),
+        w!("註冊為服務後，RAM Disk 將作為本機系統實體磁碟常駐，無需手動掛載。"),
+        WS_CHILD | WS_VISIBLE,
+        30,
+        462,
+        455,
+        22,
+        hwnd,
+        None,
+        HINSTANCE(std::ptr::null_mut()),
+        None,
+    )
+    .unwrap_or_default();
+    set_ctrl_font(lbl_svc_hint, false);
+
+    // 4. 底部按鈕區
     let btn_apply = CreateWindowExW(
         WINDOW_EX_STYLE::default(),
         w!("BUTTON"),
-        w!("套用並重新掛載"),
+        w!("套用並儲存設定"),
         WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_DEFPUSHBUTTON as u32),
-        250,
-        390,
+        260,
+        525,
         140,
         36,
         hwnd,
@@ -657,8 +836,8 @@ unsafe fn init_controls(hwnd: HWND, config: &SettingsConfig) {
         w!("BUTTON"),
         w!("關閉"),
         WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_PUSHBUTTON as u32),
-        400,
-        390,
+        410,
+        525,
         90,
         36,
         hwnd,
@@ -668,6 +847,52 @@ unsafe fn init_controls(hwnd: HWND, config: &SettingsConfig) {
     )
     .unwrap_or_default();
     set_ctrl_font(btn_cancel, false);
+}
+
+unsafe fn read_current_dialog_config(hwnd: HWND) -> SettingsConfig {
+    let cb_drv = GetDlgItem(hwnd, ID_DRIVE_COMBO as _).unwrap_or_default();
+    let mut drv_buf = [0u16; 32];
+    let cur_drv = SendMessageW(cb_drv, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as usize;
+    SendMessageW(
+        cb_drv,
+        CB_GETLBTEXT,
+        WPARAM(cur_drv),
+        LPARAM(drv_buf.as_mut_ptr() as _),
+    );
+    let drv_len = drv_buf.iter().position(|&c| c == 0).unwrap_or(drv_buf.len());
+    let mut drive_str = String::from_utf16_lossy(&drv_buf[..drv_len]).trim().to_string();
+    if drive_str.is_empty() {
+        drive_str = "R:".to_string();
+    }
+
+    let cb_sz = GetDlgItem(hwnd, ID_SIZE_COMBO as _).unwrap_or_default();
+    let mut sz_buf = [0u16; 64];
+    GetWindowTextW(cb_sz, &mut sz_buf);
+    let sz_len = sz_buf.iter().position(|&c| c == 0).unwrap_or(sz_buf.len());
+    let raw_sz = String::from_utf16_lossy(&sz_buf[..sz_len]).trim().to_string();
+    let size_str = raw_sz.split_whitespace().next().unwrap_or("2G").to_string();
+
+    let cb_cp = GetDlgItem(hwnd, ID_COMPRESS_COMBO as _).unwrap_or_default();
+    let cur_cp = SendMessageW(cb_cp, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0;
+    let compress_str = if cur_cp == 1 { "none" } else { "lz4" }.to_string();
+
+    let ed_img = GetDlgItem(hwnd, ID_IMAGE_EDIT as _).unwrap_or_default();
+    let mut img_buf = [0u16; 1024];
+    GetWindowTextW(ed_img, &mut img_buf);
+    let img_len = img_buf.iter().position(|&c| c == 0).unwrap_or(img_buf.len());
+    let raw_img = String::from_utf16_lossy(&img_buf[..img_len]).trim().to_string();
+    let image_opt = if raw_img.is_empty() { None } else { Some(raw_img) };
+
+    let chk = GetDlgItem(hwnd, ID_AUTOSTART_CHECK as _).unwrap_or_default();
+    let is_checked = SendMessageW(chk, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == 1;
+
+    SettingsConfig {
+        mount_point: drive_str,
+        size: size_str,
+        compress: compress_str,
+        image_path: image_opt,
+        auto_start: is_checked,
+    }
 }
 
 unsafe extern "system" fn settings_wndproc(
@@ -711,57 +936,80 @@ unsafe extern "system" fn settings_wndproc(
                         }
                     }
                 }
-                ID_APPLY_BTN => {
-                    // 讀取磁碟機代號
-                    let cb_drv = GetDlgItem(hwnd, ID_DRIVE_COMBO as _).unwrap_or_default();
-                    let mut drv_buf = [0u16; 32];
-                    let cur_drv = SendMessageW(cb_drv, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as usize;
-                    SendMessageW(
-                        cb_drv,
-                        CB_GETLBTEXT,
-                        WPARAM(cur_drv),
-                        LPARAM(drv_buf.as_mut_ptr() as _),
-                    );
-                    let drv_len = drv_buf.iter().position(|&c| c == 0).unwrap_or(drv_buf.len());
-                    let mut drive_str = String::from_utf16_lossy(&drv_buf[..drv_len]).trim().to_string();
-                    if drive_str.is_empty() {
-                        drive_str = "R:".to_string();
+                ID_SVC_INSTALL_START_BTN => {
+                    let cfg = read_current_dialog_config(hwnd);
+                    save_config_to_registry(&cfg);
+                    let svc_cfg: ServiceConfig = cfg.into();
+                    match service::install(&svc_cfg, true) {
+                        Ok(_) => {
+                            MessageBoxW(
+                                hwnd,
+                                w!("Rust RAM Disk 系統服務已成功註冊並啟動！\n\n虛擬磁碟已常駐於系統，關閉此介面不影響磁碟運作。"),
+                                w!("服務已就緒"),
+                                MB_ICONINFORMATION | MB_OK,
+                            );
+                            if let Some(host) = *HOST_WINDOW.lock().unwrap() {
+                                let _ = PostMessageW(host.0, WM_APP_SERVICE_STATE_CHANGED, WPARAM(0), LPARAM(0));
+                            }
+                        }
+                        Err(e) => {
+                            let err_msg = format!("註冊或啟動系統服務失敗: {}\n\n提示：請確認是否具備系統管理員權限。", e);
+                            let wide_err: Vec<u16> = err_msg.encode_utf16().chain(std::iter::once(0)).collect();
+                            MessageBoxW(hwnd, PCWSTR(wide_err.as_ptr()), w!("操作失敗"), MB_ICONERROR | MB_OK);
+                        }
                     }
-
-                    // 讀取容量
-                    let cb_sz = GetDlgItem(hwnd, ID_SIZE_COMBO as _).unwrap_or_default();
-                    let mut sz_buf = [0u16; 64];
-                    GetWindowTextW(cb_sz, &mut sz_buf);
-                    let sz_len = sz_buf.iter().position(|&c| c == 0).unwrap_or(sz_buf.len());
-                    let raw_sz = String::from_utf16_lossy(&sz_buf[..sz_len]).trim().to_string();
-                    let size_str = raw_sz.split_whitespace().next().unwrap_or("2G").to_string();
-
-                    // 讀取壓縮模式
-                    let cb_cp = GetDlgItem(hwnd, ID_COMPRESS_COMBO as _).unwrap_or_default();
-                    let cur_cp = SendMessageW(cb_cp, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0;
-                    let compress_str = if cur_cp == 1 { "none" } else { "lz4" }.to_string();
-
-                    // 讀取快照路徑
-                    let ed_img = GetDlgItem(hwnd, ID_IMAGE_EDIT as _).unwrap_or_default();
-                    let mut img_buf = [0u16; 1024];
-                    GetWindowTextW(ed_img, &mut img_buf);
-                    let img_len = img_buf.iter().position(|&c| c == 0).unwrap_or(img_buf.len());
-                    let raw_img = String::from_utf16_lossy(&img_buf[..img_len]).trim().to_string();
-                    let image_opt = if raw_img.is_empty() { None } else { Some(raw_img) };
-
-                    // 讀取開機自啟
-                    let chk = GetDlgItem(hwnd, ID_AUTOSTART_CHECK as _).unwrap_or_default();
-                    let is_checked = SendMessageW(chk, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == 1;
-
-                    let new_config = SettingsConfig {
-                        mount_point: drive_str,
-                        size: size_str,
-                        compress: compress_str,
-                        image_path: image_opt,
-                        auto_start: is_checked,
-                    };
-
-                    // 儲存至登錄檔
+                    update_service_labels(hwnd);
+                }
+                ID_SVC_START_BTN => {
+                    match service::start() {
+                        Ok(_) => {
+                            MessageBoxW(hwnd, w!("Rust RAM Disk 系統服務已成功啟動！"), w!("服務啟動"), MB_ICONINFORMATION | MB_OK);
+                            if let Some(host) = *HOST_WINDOW.lock().unwrap() {
+                                let _ = PostMessageW(host.0, WM_APP_SERVICE_STATE_CHANGED, WPARAM(0), LPARAM(0));
+                            }
+                        }
+                        Err(e) => {
+                            let err_msg = format!("啟動服務失敗: {}", e);
+                            let wide_err: Vec<u16> = err_msg.encode_utf16().chain(std::iter::once(0)).collect();
+                            MessageBoxW(hwnd, PCWSTR(wide_err.as_ptr()), w!("啟動失敗"), MB_ICONERROR | MB_OK);
+                        }
+                    }
+                    update_service_labels(hwnd);
+                }
+                ID_SVC_STOP_BTN => {
+                    match service::stop() {
+                        Ok(_) => {
+                            MessageBoxW(hwnd, w!("Rust RAM Disk 系統服務已成功停止。"), w!("服務停止"), MB_ICONINFORMATION | MB_OK);
+                            if let Some(host) = *HOST_WINDOW.lock().unwrap() {
+                                let _ = PostMessageW(host.0, WM_APP_SERVICE_STATE_CHANGED, WPARAM(0), LPARAM(0));
+                            }
+                        }
+                        Err(e) => {
+                            let err_msg = format!("停止服務失敗: {}", e);
+                            let wide_err: Vec<u16> = err_msg.encode_utf16().chain(std::iter::once(0)).collect();
+                            MessageBoxW(hwnd, PCWSTR(wide_err.as_ptr()), w!("停止失敗"), MB_ICONERROR | MB_OK);
+                        }
+                    }
+                    update_service_labels(hwnd);
+                }
+                ID_SVC_UNINSTALL_BTN => {
+                    match service::uninstall() {
+                        Ok(_) => {
+                            MessageBoxW(hwnd, w!("Rust RAM Disk 系統服務已成功卸載移除。"), w!("服務已卸載"), MB_ICONINFORMATION | MB_OK);
+                            if let Some(host) = *HOST_WINDOW.lock().unwrap() {
+                                let _ = PostMessageW(host.0, WM_APP_SERVICE_STATE_CHANGED, WPARAM(0), LPARAM(0));
+                            }
+                        }
+                        Err(e) => {
+                            let err_msg = format!("卸載服務失敗: {}", e);
+                            let wide_err: Vec<u16> = err_msg.encode_utf16().chain(std::iter::once(0)).collect();
+                            MessageBoxW(hwnd, PCWSTR(wide_err.as_ptr()), w!("卸載失敗"), MB_ICONERROR | MB_OK);
+                        }
+                    }
+                    update_service_labels(hwnd);
+                }
+                ID_APPLY_BTN => {
+                    let new_config = read_current_dialog_config(hwnd);
                     save_config_to_registry(&new_config);
 
                     // 存入待套用 slot
@@ -770,7 +1018,7 @@ unsafe extern "system" fn settings_wndproc(
                         *pending = Some(new_config);
                     }
 
-                    // 通知 Host 視窗進行重新掛載
+                    // 通知 Host 視窗進行重新掛載或服務重啟
                     if let Some(host) = *HOST_WINDOW.lock().unwrap() {
                         let _ = PostMessageW(host.0, WM_APP_APPLY_SETTINGS, WPARAM(0), LPARAM(0));
                     }

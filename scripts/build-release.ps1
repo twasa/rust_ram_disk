@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Rust RAM Disk 自動化發布打包腳本 (Build Release & Export Artifacts)
 
@@ -176,8 +176,8 @@ Copy-Item (Join-Path $ProjectRoot "README.md") (Join-Path $StagingDir "README.md
 $StartBat = @"
 @echo off
 cd /d "%~dp0"
-echo Starting Rust RAM Disk (2GB, Mount R:, LZ4 Compression, Systray)...
-start "" "%~dp0rust_ram_disk.exe" mount -s 2G -m R: -c lz4 --tray
+echo Starting Rust RAM Disk (Systray Monitor & Windows Service)...
+start "" "%~dp0rust_ram_disk.exe"
 "@
 $StartBat | Out-File -FilePath (Join-Path $StagingDir "start-ramdisk.bat") -Encoding ascii -Force
 
@@ -258,9 +258,8 @@ $WixXml = @"
       <Component Id="ApplicationShortcuts" Guid="{C1D2E3F4-7777-4A5B-8C7D-0E1F2A3B4C5D}">
         <Shortcut Id="AppStartMenuShortcut"
                   Name="Rust RAM Disk"
-                  Description="啟動 Rust RAM Disk (預設 2GB R: 槽，啟用 LZ4 透明壓縮與系統匣)"
+                  Description="啟動 Rust RAM Disk (系統匣常駐與 Windows 系統服務監控)"
                   Target="[INSTALLFOLDER]rust_ram_disk.exe"
-                  Arguments="mount -s 2G -m R: -c lz4 --tray"
                   WorkingDirectory="INSTALLFOLDER" />
                   
         <Shortcut Id="InstallDriverShortcut"
@@ -279,9 +278,8 @@ $WixXml = @"
       <Component Id="DesktopShortcutComponent" Guid="{C1D2E3F4-8888-4A5B-8C7D-0E1F2A3B4C5D}">
         <Shortcut Id="AppDesktopShortcut"
                   Name="Rust RAM Disk"
-                  Description="啟動 Rust RAM Disk"
+                  Description="啟動 Rust RAM Disk (系統匣常駐與 Windows 系統服務監控)"
                   Target="[INSTALLFOLDER]rust_ram_disk.exe"
-                  Arguments="mount -s 2G -m R: -c lz4 --tray"
                   WorkingDirectory="INSTALLFOLDER" />
         <RegistryValue Root="HKCU" Key="Software\RustRAMDisk" Name="desktop_shortcut" Type="integer" Value="1" KeyPath="yes" />
       </Component>

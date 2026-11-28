@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Windows 系統服務常駐生命週期架構 (Windows System Service Architecture)** (`src/service/mod.rs`):
+  - 核心 RAM Disk 由獨立背景 Windows 服務 (`RustRamDiskService`) 代管，隨系統開機自動於背景掛載為本機全域實體硬碟 (`DRIVE_FIXED`)。
+  - 支援 SCM 服務控制管理員完整指令：`service install`（註冊並啟動）、`service uninstall`（停止並移除）、`service start`、`service stop`、`service restart`、`service status`、`service snapshot` 與 `service run`。
+  - 全域配置保存於 `%ProgramData%\RustRamDisk\config.json`，支援 Session 0 與使用者會話無障礙跨程序存取。
+- **UI 與服務徹底解耦之系統匣常駐監控 (Systray Service Monitor & Decoupled Lifecycle)** (`src/main.rs`, `src/tray/mod.rs`):
+  - 執行主程式預設開啟右下角 Systray 監控面板；當使用者點擊「❌ 關閉監控面板 (Exit Tray)」時，僅關閉 UI 面板，**RAM Disk 虛擬磁碟持續跟隨服務在背景常駐，絕對不會因為 UI 關閉而消失**！
+  - 系統匣圖示狀態即時感知：服務運行中呈現青藍色圖示，服務停止/離線時呈現橘黃色圖示。
+  - 右鍵選單支援「▶️ 啟動系統服務」、「⏹️ 停止系統服務」、「🔄 重新啟動服務」與「💾 立即儲存快照」。
+- **原生 Win32 設定視窗升級服務整合管理 (Integrated Service Management in Settings UI)** (`src/ui/settings.rs`):
+  - 設定畫面新增「Windows 系統服務管理」控制區塊，即時顯示服務狀態燈號與說明。
+  - 內建「🚀 註冊並啟動服務」、「▶️ 啟動服務」、「⏹️ 停止服務」與「🗑️ 卸載服務」一鍵快捷控制。
+  - 動態套用設定後自動重啟服務並平滑重新掛載磁碟。
+
 ## [0.1.4] - 2026-11-28
 
 ### Fixed
