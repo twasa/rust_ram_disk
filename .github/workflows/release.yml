@@ -17,6 +17,9 @@ permissions:
 jobs:
   build-and-release:
     runs-on: windows-latest
+    env:
+      WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -28,10 +31,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Provision Code Signing Certificate
-        if: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' }}
-        env:
-          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        if: env.WINDOWS_CERTIFICATE_BASE64 != ''
         run: |
           $certDir = Join-Path $HOME ".code-signing"
           if (-not (Test-Path $certDir)) { New-Item -ItemType Directory -Force -Path $certDir | Out-Null }
