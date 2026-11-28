@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Rust RAM Disk 本地建置與部署腳本 (Build & Deploy to Local RAMDISK_HOME)
 
@@ -86,8 +86,8 @@ if (Test-Path $SourceMsi) {
 $StartBatchContent = @"
 @echo off
 cd /d "%~dp0"
-echo Starting Rust RAM Disk (2GB, Mount R:, LZ4 Compression, Systray)...
-start "" "%~dp0rust_ram_disk.exe" mount -s 2G -m R: -c lz4 --tray
+echo Starting Rust RAM Disk (Systray Monitor & Windows Service)...
+start "" "%~dp0rust_ram_disk.exe"
 "@
 $StartBatchPath = Join-Path $TargetDir "start-ramdisk.bat"
 $StartBatchContent | Out-File -FilePath $StartBatchPath -Encoding ascii -Force

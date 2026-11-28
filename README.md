@@ -1,18 +1,23 @@
 # Rust RAM Disk (`rust_ram_disk`)
 
-基於 Rust 打造的高效能 Windows 虛擬記憶體磁碟（RAM Disk），整合動態稀疏分頁（Sparse Paging）、LZ4 即時透明壓縮、映像檔持久化（Snapshot）與 Windows 系統匣（Systray）常駐管理。
+基於 Rust 打造的高效能 Windows 虛擬記憶體磁碟（RAM Disk），整合 **Windows 系統服務（Windows System Service）**、動態稀疏分頁（Sparse Paging）、LZ4 即時透明壓縮、映像檔持久化（Snapshot）與 Windows 系統匣（Systray）常駐監控。
 
 ## 🌟 核心特性
+- **Windows 系統服務常駐架構（Windows System Service Lifecycle）**：
+  - 核心生命週期由獨立 Windows 服務（`RustRamDiskService`）全時託管，隨系統開機即可自動於背景掛載為本機全域磁碟（`DRIVE_FIXED`）。
+  - **UI 程式與服務解耦**：執行程式（`rust_ram_disk.exe`）直接開啟右下角系統匣（Systray）監控面板；**關閉 UI 面板或結束 Systray，虛擬磁碟持續在背景常駐運作，不會因 UI 關閉而消失**！
+  - 原生整合 Windows 服務控制管理員（SCM），支援即時註冊、啟動、停止、重啟與狀態檢測。
 - **極致記憶體吞吐**：純記憶體隨機寫入突破 **1,000,000+ IOPS**，循序讀寫高達 **3~6 GB/s**。
 - **動態稀疏分頁（Sparse Memory Paging）**：未寫入區塊不佔用實體 RAM，寫入時按需（On-Demand）配置記憶體分頁。
 - **透明壓縮（LZ4 Compression）**：可選區塊級即時壓縮，大幅節省實體 RAM 佔用（可達 5x~45x 記憶體節省）並提升整體快取容量。
 - **持久化快照（Snapshot & Image Persistence）**：支援一鍵或排程將記憶體狀態同步寫入 SSD 映像檔（`.img`），下次啟動時無縫載入。
 - **系統匣整合與原生設定介面（Windows Systray & Settings UI）**：
-  - 右下角常駐圖示，即時顯示磁碟機代號與記憶體容量。
-  - **純 Win32 原生設定視窗**：左鍵點擊圖示或右鍵點選「⚙️ 磁碟設定」即可叫出設定介面，零額外 GUI 依賴、瞬間啟動。
-  - **動態重新配置（Apply & Remount）**：可於運作中即時切換磁碟機代號（`R:`, `S:`, `T:` 等）、變更容量（`512M` 至 `64G` 或自訂）、切換壓縮演算法（LZ4 / None）、選擇快照映像檔路徑，以及勾選「開機自動背景掛載（Run 登錄檔）」。
-  - **安全熱切換**：套用時自動儲存現有快照至映像檔、卸載舊磁碟並以新參數無縫重掛，隨後即時更新系統匣狀態與 Windows 檔案總管。
-  - **快速選單**：右鍵選單提供即時快照存檔、安全卸載與退出功能。
+  - 右下角常駐圖示，即時顯示磁碟機代號、記憶體容量與服務運行狀態（運行中為青藍色，離線為橘黃色）。
+  - **純 Win32 原生設定視窗**：左鍵點擊圖示或右鍵點選「⚙️ 系統服務與磁碟設定」即可叫出設定介面，零額外 GUI 依賴、瞬間啟動。
+  - **系統服務與磁碟一體化管理**：介面直接提供「🚀 註冊並啟動服務」、「▶️ 啟動服務」、「⏹️ 停止服務」、「🗑️ 卸載服務」與狀態即時指示。
+  - **動態重新配置（Apply & Remount）**：可於運作中即時切換磁碟機代號（`R:`, `S:`, `T:` 等）、變更容量（`512M` 至 `64G` 或自訂）、切換壓縮演算法（LZ4 / None）、選擇快照映像檔路徑，以及勾選「開機自動背景啟動」。
+  - **安全熱切換**：套用時自動儲存現有快照至映像檔、重啟服務並以新參數無縫重掛，隨後即時更新系統匣狀態與 Windows 檔案總管。
+  - **快速選單**：右鍵選單提供即時快照存檔、服務啟動/停止/重啟，以及「關閉監控面板（磁碟保持常駐）」。
 
 ## 📊 實測基準效能 (In-Memory Benchmark)
 在 512 MB 虛擬記憶體磁碟上的實測表現（AMD/Intel x64）：
@@ -82,6 +87,37 @@
 
 ## 🚀 CLI 指令與手動操作
 
+### 啟動系統匣監控面板 (預設行為)
+```powershell
+# 執行程式預設直接啟動右下角 Systray 監控面板
+# RAM Disk 跟隨 Windows 系統服務，關閉面板時磁碟不受影響！
+cargo run --release
+```
+
+### Windows 系統服務管理指令
+```powershell
+# 註冊並立即啟動系統服務 (預設掛載 R:，容量 2G，啟用 LZ4 壓縮與開機自啟)
+cargo run --release -- service install -m R: -s 2G -c lz4 --auto-start --start-now
+
+# 查詢服務狀態
+cargo run --release -- service status
+
+# 啟動系統服務
+cargo run --release -- service start
+
+# 停止系統服務 (自動卸載磁碟機)
+cargo run --release -- service stop
+
+# 重新啟動系統服務
+cargo run --release -- service restart
+
+# 觸發即時快照存檔
+cargo run --release -- service snapshot
+
+# 解除註冊並移除系統服務
+cargo run --release -- service uninstall
+```
+
 ### 執行效能基準測試
 ```powershell
 # 無壓縮測試
@@ -91,10 +127,10 @@ cargo run --release -- benchmark -s 512M -c none
 cargo run --release -- benchmark -s 512M -c lz4
 ```
 
-### 啟動 RAM Disk 並常駐系統匣 (Systray)
+### 傳統本機臨時掛載 (非服務模式)
 ```powershell
 # 建立 2GB RAM Disk，預設掛載 R:，啟用 LZ4 壓縮與系統匣圖示
-cargo run --release -- mount -s 10G -m S: -c lz4 --tray
+cargo run --release -- mount -s 2G -m R: -c lz4 --tray
 
 # 搭配快照檔案（啟動時自動載入，結束時自動回存）
 cargo run --release -- mount -s 4G -m R: -i D:\backup\ramdisk.img --tray

@@ -206,8 +206,69 @@ pub fn relaunch_elevated() -> Result<(), VfsError> {
     std::process::exit(0);
 }
 
+/// 自動以 Windows 管理員權限重啟程式並帶入特定參數 (UAC 提權)
+#[cfg(target_os = "windows")]
+pub fn relaunch_elevated_with_args(args: &[&str]) -> Result<(), VfsError> {
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWDEFAULT;
+
+    let exe = std::env::current_exe().map_err(VfsError::ProcessLaunch)?;
+    let args_str = args
+        .iter()
+        .map(|a| {
+            if a.contains(' ') {
+                format!("\"{}\"", a)
+            } else {
+                a.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let wide_exe: Vec<u16> = exe
+        .to_string_lossy()
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let wide_args: Vec<u16> = args_str.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide_verb: Vec<u16> = "runas\0".encode_utf16().collect();
+
+    let exe_dir = exe.parent().map(|p| {
+        p.to_string_lossy()
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<u16>>()
+    });
+
+    let mut sei = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOCLOSEPROCESS,
+        hwnd: Default::default(),
+        lpVerb: PCWSTR(wide_verb.as_ptr()),
+        lpFile: PCWSTR(wide_exe.as_ptr()),
+        lpParameters: PCWSTR(wide_args.as_ptr()),
+        lpDirectory: exe_dir.as_ref().map_or(PCWSTR::null(), |d| PCWSTR(d.as_ptr())),
+        nShow: SW_SHOWDEFAULT.0 as i32,
+        ..Default::default()
+    };
+
+    unsafe {
+        ShellExecuteExW(&mut sei).map_err(|e| {
+            VfsError::ProcessLaunch(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+        })?;
+    }
+
+    Ok(())
+}
+
 #[cfg(not(target_os = "windows"))]
 pub fn relaunch_elevated() -> Result<(), VfsError> {
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn relaunch_elevated_with_args(_args: &[&str]) -> Result<(), VfsError> {
     Ok(())
 }
 
