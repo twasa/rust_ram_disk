@@ -100,6 +100,16 @@ if (-not (Test-Path $BuiltExe)) {
 }
 Write-Ok "Release 二進位檔編譯成功: $BuiltExe"
 
+# 自動對核心二進位檔進行代碼簽署
+$SignScript = Join-Path $ScriptDir "manage-code-signing.ps1"
+if (Test-Path $SignScript) {
+    try {
+        & $SignScript -Action Sign -Path $BuiltExe
+    } catch {
+        Write-Warn "核心二進位檔簽署略過: $_"
+    }
+}
+
 # 3. 封裝 Windows 官方單一 MSI 安裝套件 (整合 WiX Toolset)
 Write-Info "`n>>> [3/4] 封裝 Windows 官方單一 MSI 安裝套件 (WiX Toolset)..."
 
@@ -355,6 +365,16 @@ Remove-Item -Recurse -Force $StagingDir -ErrorAction SilentlyContinue
 Write-Ok "🎉 單一 MSI 安裝套件封裝圓滿成功！"
 Write-Ok "MSI 安裝檔: $OutputMsi"
 Write-Ok "檔案大小: $((Get-Item $OutputMsi).Length / 1MB | ForEach-Object { '{0:N2} MB' -f $_ })"
+
+# 3.5 執行代碼數位簽章 (Code Signing)
+if (Test-Path $SignScript) {
+    Write-Info "`n>>> 檢測並套用數位簽章 (Authenticode Code Signing)..."
+    try {
+        & $SignScript -Action Sign -Path $OutputMsi
+    } catch {
+        Write-Warn "MSI 安裝包簽署略過: $_"
+    }
+}
 
 # 4. 驗證交付產物並計算 SHA-256
 Write-Info "`n>>> [4/4] 驗證交付產物與計算校驗碼至 release-artifacts/..."

@@ -22,6 +22,19 @@ jobs:
       - name: Rust Cargo cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Provision Code Signing Certificate
+        if: env.WINDOWS_CERTIFICATE_BASE64 != ''
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $certDir = Join-Path $HOME ".code-signing"
+          if (-not (Test-Path $certDir)) { New-Item -ItemType Directory -Force -Path $certDir | Out-Null }
+          $pfxPath = Join-Path $certDir "code-signing.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+          @{ Password = $env:WINDOWS_CERTIFICATE_PASSWORD } | ConvertTo-Json | Out-File (Join-Path $certDir "credentials.json") -Encoding utf8
+          Write-Host "[OK] Code signing certificate successfully provisioned in CI environment." -ForegroundColor Green
+
       - name: Build release and package MSI
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/build-release.ps1
 
